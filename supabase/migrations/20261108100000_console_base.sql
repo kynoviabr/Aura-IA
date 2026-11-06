@@ -634,3 +634,148 @@ GRANT EXECUTE ON FUNCTION public.aura_raise_alert(text, text, text, text, uuid, 
   public.aura_set_provider_key(text, text, uuid), public.aura_get_provider_key(text),
   public.aura_set_channel_health(uuid, text, text), public.aura_set_provider_status(text, boolean, text),
   public.aura_retry_failed_events(uuid) TO service_role;
+
+-- ---------- Produtos (aplicações conectadas) pelo Console ----------
+
+-- Cria o produto e devolve a chave de API e a senha dos avisos UMA vez.
+CREATE FUNCTION public.aura_create_app(p_slug text, p_name text, p_webhook_url text, p_actor uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_key text;
+  v_secret text := replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '');
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.apps WHERE slug = p_slug) THEN RAISE EXCEPTION 'slug_in_use' USING ERRCODE = '23505'; END IF;
+  v_key := private.create_app_key(p_slug, p_name);
+  UPDATE public.apps SET webhook_url = nullif(p_webhook_url, ''), webhook_secret = v_secret WHERE slug = p_slug;
+  INSERT INTO public.audit_log (actor, action, target_type, target_id) VALUES (p_actor, 'app_created', 'app', p_slug);
+  RETURN jsonb_build_object('api_key', v_key, 'webhook_secret', v_secret);
+END;
+$$;
+
+-- Nova chave de API (a antiga para de funcionar na hora).
+CREATE FUNCTION public.aura_rotate_app_key(p_app_id uuid, p_actor uuid)
+RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  a public.apps%ROWTYPE;
+  v_key text;
+BEGIN
+  SELECT * INTO a FROM public.apps WHERE id = p_app_id;
+  IF a.id IS NULL THEN RAISE EXCEPTION 'app_not_found' USING ERRCODE = '22023'; END IF;
+  v_key := private.create_app_key(a.slug, a.name);
+  INSERT INTO public.audit_log (actor, action, target_type, target_id) VALUES (p_actor, 'app_key_rotated', 'app', a.slug);
+  RETURN v_key;
+END;
+$$;
+
+-- ---------- Números do Console ----------
+
+CREATE FUNCTION public.aura_console_overview()
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT jsonb_build_object(
+    'apps', (SELECT count(*) FROM public.apps WHERE is_active),
+    'workspaces', (SELECT count(*) FROM public.workspaces WHERE status = 'active'),
+    'channels_connected', (SELECT count(*) FROM public.channels WHERE status = 'connected'),
+    'channels_problem', (SELECT count(*) FROM public.channels WHERE status = 'disconnected' OR health IN ('error', 'disconnected', 'warning')),
+    'messages_today', (SELECT count(*) FROM public.messages WHERE sent_at >= date_trunc('day', now() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'),
+    'messages_in_today', (SELECT count(*) FROM public.messages WHERE direction = 'incoming' AND sent_at >= date_trunc('day', now() AT TIME ZONE 'America/Sao_Paulo') AT TIME ZONE 'America/Sao_Paulo'),
+    'ai_cost_month_usd', (SELECT coalesce(sum(cost_usd), 0) FROM public.ai_usage WHERE created_at >= date_trunc('month', now())),
+    'ai_credits_month', (SELECT coalesce(sum(credits), 0) FROM public.ai_usage WHERE created_at >= date_trunc('month', now())),
+    'ai_calls_month', (SELECT count(*) FROM public.ai_usage WHERE created_at >= date_trunc('month', now()) AND feature NOT IN ('ping')),
+    'alerts_open', (SELECT count(*) FROM public.alerts WHERE status = 'open'),
+    'alerts_critical', (SELECT count(*) FROM public.alerts WHERE status = 'open' AND severity = 'critical'),
+    'events_pending', (SELECT count(*) FROM public.app_events WHERE status = 'pending'),
+    'events_failed', (SELECT count(*) FROM public.app_events WHERE status = 'failed'),
+    'wallets_empty', (SELECT count(*) FROM public.credit_wallets WHERE balance <= 0)
+  )
+$$;
+
+-- Uma linha por empresa: produto, número, saúde, movimento, custo de IA do mês e créditos.
+CREATE FUNCTION public.aura_console_workspaces()
+RETURNS TABLE (
+  id uuid, name text, external_id text, status text, created_at timestamptz,
+  app_id uuid, app_name text, app_slug text,
+  channel_id uuid, channel_status text, health text, health_detail text, phone_number text, display_name text,
+  last_inbound_at timestamptz, last_outbound_at timestamptz, last_error text, last_error_at timestamptz,
+  conversations integer, messages_month integer,
+  ai_cost_month_usd numeric, ai_credits_month numeric, ai_calls_month integer,
+  credit_balance numeric, hard_stop boolean, alerts_open integer
+)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT w.id, w.name, w.external_id, w.status, w.created_at,
+    a.id, a.name, a.slug,
+    c.id, coalesce(c.status, 'not_started'), coalesce(c.health, 'unknown'), c.health_detail, c.phone_number, c.display_name,
+    c.last_inbound_at, c.last_outbound_at, c.last_error, c.last_error_at,
+    (SELECT count(*)::int FROM public.conversations cv WHERE cv.workspace_id = w.id),
+    (SELECT count(*)::int FROM public.messages m WHERE m.workspace_id = w.id AND m.sent_at >= date_trunc('month', now())),
+    (SELECT coalesce(sum(u.cost_usd), 0) FROM public.ai_usage u WHERE u.workspace_id = w.id AND u.created_at >= date_trunc('month', now())),
+    (SELECT coalesce(sum(u.credits), 0) FROM public.ai_usage u WHERE u.workspace_id = w.id AND u.created_at >= date_trunc('month', now())),
+    (SELECT count(*)::int FROM public.ai_usage u WHERE u.workspace_id = w.id AND u.created_at >= date_trunc('month', now())),
+    cw.balance, coalesce(cw.hard_stop, true),
+    (SELECT count(*)::int FROM public.alerts al WHERE al.workspace_id = w.id AND al.status = 'open')
+  FROM public.workspaces w
+  JOIN public.apps a ON a.id = w.app_id
+  LEFT JOIN public.channels c ON c.workspace_id = w.id
+  LEFT JOIN public.credit_wallets cw ON cw.workspace_id = w.id
+  ORDER BY w.name
+$$;
+
+-- Uso de IA por dia (últimos N dias), geral ou de uma empresa.
+CREATE FUNCTION public.aura_console_usage_daily(p_workspace_id uuid, p_days integer DEFAULT 30)
+RETURNS TABLE (day date, calls integer, cost_usd numeric, credits numeric, input_tokens bigint, output_tokens bigint)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT d::date, count(u.id)::int, coalesce(sum(u.cost_usd), 0), coalesce(sum(u.credits), 0),
+    coalesce(sum(u.input_tokens), 0), coalesce(sum(u.output_tokens), 0)
+  FROM generate_series((now() AT TIME ZONE 'America/Sao_Paulo')::date - (greatest(p_days, 1) - 1), (now() AT TIME ZONE 'America/Sao_Paulo')::date, interval '1 day') d
+  LEFT JOIN public.ai_usage u ON (u.created_at AT TIME ZONE 'America/Sao_Paulo')::date = d::date
+    AND u.feature <> 'ping' AND (p_workspace_id IS NULL OR u.workspace_id = p_workspace_id)
+  GROUP BY d ORDER BY d
+$$;
+
+-- ---------- Despertador (verificações automáticas) ----------
+
+-- Senha que o agendador usa para chamar as funções de verificação. Gerada aqui e guardada no cofre.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM vault.decrypted_secrets WHERE name = 'aura_cron_secret') THEN
+    PERFORM vault.create_secret(replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', ''), 'aura_cron_secret', 'Senha do agendador da Aura IA');
+  END IF;
+END;
+$$;
+
+CREATE FUNCTION public.aura_cron_secret_ok(p_secret text)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  SELECT coalesce(p_secret, '') <> '' AND EXISTS (SELECT 1 FROM vault.decrypted_secrets WHERE name = 'aura_cron_secret' AND decrypted_secret = p_secret)
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.aura_create_app(text, text, text, uuid), public.aura_rotate_app_key(uuid, uuid),
+  public.aura_console_overview(), public.aura_console_workspaces(), public.aura_console_usage_daily(uuid, integer),
+  public.aura_cron_secret_ok(text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.aura_create_app(text, text, text, uuid), public.aura_rotate_app_key(uuid, uuid),
+  public.aura_console_overview(), public.aura_console_workspaces(), public.aura_console_usage_daily(uuid, integer),
+  public.aura_cron_secret_ok(text) TO service_role;

@@ -135,3 +135,27 @@ describe('modelos padrão', () => {
     expect(sent).toMatchObject({ accountId: 'acc', name: 'x', category: 'UTILITY', language: 'pt_BR' });
   });
 });
+
+import { explainProviderError, testProviderKey } from '../../supabase/functions/_shared/providers.ts';
+
+describe('teste das chaves de IA', () => {
+  it('explica erros comuns', () => {
+    expect(explainProviderError(401, '')).toBe('Chave inválida ou revogada.');
+    expect(explainProviderError(429, '{"error":{"code":"insufficient_quota"}}')).toBe('Sem créditos no provedor. Recarregue.');
+    expect(explainProviderError(400, 'Your credit balance is too low')).toBe('Sem créditos no provedor. Recarregue.');
+    expect(explainProviderError(429, 'rate limit')).toBe('Limite de uso do provedor atingido no momento.');
+    expect(explainProviderError(503, '')).toBe('Provedor fora do ar (erro 503).');
+  });
+  it('usa o cabeçalho certo de cada provedor', async () => {
+    const seen: Array<{ url: string; headers: Record<string, string> }> = [];
+    const fakeFetch = (async (url: string, init: RequestInit) => {
+      seen.push({ url, headers: init.headers as Record<string, string> });
+      return new Response('{}', { status: url.includes('anthropic') ? 200 : 401 });
+    }) as unknown as typeof fetch;
+    expect((await testProviderKey('anthropic', 'k1', fakeFetch)).ok).toBe(true);
+    const o = await testProviderKey('openai', 'k2', fakeFetch);
+    expect(o).toMatchObject({ ok: false, error: 'Chave inválida ou revogada.' });
+    expect(seen[0].headers['x-api-key']).toBe('k1');
+    expect(seen[1].headers.Authorization).toBe('Bearer k2');
+  });
+});

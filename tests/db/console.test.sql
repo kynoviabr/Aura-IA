@@ -37,7 +37,7 @@ SELECT public.aura_set_provider_key('anthropic', 'sk-ant-api03-abcdefghijklmnopq
 SELECT pg_temp.ok((SELECT key_hint = '…1234' AND key_secret_id IS NOT NULL FROM public.ai_providers WHERE provider = 'anthropic'), 'key stored with hint only');
 SELECT pg_temp.ok(public.aura_get_provider_key('anthropic') = 'sk-ant-api03-abcdefghijklmnopqrstuvwxyz-1234', 'key readable by server');
 SELECT public.aura_set_provider_key('anthropic', 'sk-ant-api03-zzzzzzzzzzzzzzzzzzzzzzzzzz-9999', NULL);
-SELECT pg_temp.ok((SELECT count(*) = 1 FROM vault.secrets) AND public.aura_get_provider_key('anthropic') LIKE '%9999', 'key replaced, not duplicated');
+SELECT pg_temp.ok((SELECT count(*) = 1 FROM vault.secrets WHERE name LIKE 'aura_ai_key_%') AND public.aura_get_provider_key('anthropic') LIKE '%9999', 'key replaced, not duplicated');
 UPDATE public.ai_providers SET enabled = true, balance_usd = 5 WHERE provider = 'anthropic';
 SELECT public.aura_set_provider_status('anthropic', false, 'invalid x-api-key');
 SELECT pg_temp.ok((SELECT count(*) = 1 FROM public.alerts WHERE kind = 'provider_error' AND status = 'open'), 'provider error alert');
@@ -67,6 +67,22 @@ UPDATE public.app_events SET status = 'failed';
 SELECT pg_temp.ok(public.aura_retry_failed_events(NULL) >= 1, 'retry failed events');
 SELECT public.aura_finish_app_event(id, true) FROM public.app_events WHERE type = 'message.received';
 SELECT pg_temp.ok((SELECT status = 'resolved' FROM public.alerts WHERE kind = 'app_delivery_failing'), 'delivery ok resolves');
+
+-- Console: produtos, números agregados e despertador
+SELECT pg_temp.ok((SELECT (r ->> 'api_key') LIKE 'aura_%' AND length(r ->> 'webhook_secret') = 64
+  FROM (SELECT public.aura_create_app('belariz', 'Belariz', 'https://belariz.example/aura', NULL) r) t), 'app created from console');
+DO $$ BEGIN PERFORM public.aura_create_app('belariz', 'X', NULL, NULL); RAISE EXCEPTION 'ASSERT: dup slug';
+EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'PASS: duplicate slug refused'; END $$;
+CREATE TEMP TABLE oldkey AS SELECT api_key_hash h FROM public.apps WHERE slug = 'belariz';
+SELECT public.aura_rotate_app_key((SELECT id FROM public.apps WHERE slug = 'belariz'), NULL);
+SELECT pg_temp.ok((SELECT api_key_hash <> (SELECT h FROM oldkey) FROM public.apps WHERE slug = 'belariz'), 'key rotated');
+SELECT pg_temp.ok((SELECT (o ->> 'workspaces')::int = 1 AND (o ->> 'channels_connected')::int = 1 AND (o ->> 'ai_calls_month')::int >= 3
+  FROM (SELECT public.aura_console_overview() o) t), 'overview numbers');
+SELECT pg_temp.ok((SELECT name = 'Clínica Bella' AND app_slug = 'clinova' AND channel_status = 'connected' AND ai_calls_month >= 3 AND credit_balance IS NOT NULL
+  FROM public.aura_console_workspaces()), 'workspaces row');
+SELECT pg_temp.ok((SELECT count(*) = 7 AND sum(calls) >= 3 FROM public.aura_console_usage_daily(NULL, 7)), 'daily usage series');
+SELECT pg_temp.ok(public.aura_cron_secret_ok((SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'aura_cron_secret')), 'cron secret ok');
+SELECT pg_temp.ok(NOT public.aura_cron_secret_ok('errado') AND NOT public.aura_cron_secret_ok(NULL), 'wrong cron secret refused');
 
 SET LOCAL ROLE anon;
 DO $$ BEGIN PERFORM public.aura_get_provider_key('anthropic'); RAISE EXCEPTION 'ASSERT: anon key';
