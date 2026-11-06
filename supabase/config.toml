@@ -1,0 +1,11 @@
+project_id = "kkkxyvchdtjagvmevxve"
+
+# Funções chamadas por sistemas externos: a proteção é própria (assinatura ou chave), não o login do Supabase.
+[functions.api]
+verify_jwt = false
+
+[functions.zernio-webhook]
+verify_jwt = false
+
+[functions.dispatch-events]
+verify_jwt = false
