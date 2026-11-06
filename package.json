@@ -1,0 +1,15 @@
+{
+  "name": "aura-ia",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:db": "bash scripts/db-test.sh",
+    "check:functions": "cd supabase/functions && DENO_CERT=${DENO_CERT:-} npx -y deno@2.1.4 check --config deno.json api/index.ts zernio-webhook/index.ts dispatch-events/index.ts"
+  },
+  "devDependencies": {
+    "typescript": "5.6.3",
+    "vitest": "2.1.8"
+  }
+}
