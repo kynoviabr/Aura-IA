@@ -103,6 +103,9 @@ async function handle(db: SupabaseClient, me: Me, action: string, b: Record<stri
           .eq('workspace_id', id).gte('created_at', new Date(Date.now() - 30 * 864e5).toISOString()).limit(5000),
       ]);
       if (!ws) throw new HttpError(404, 'not_found', 'Empresa não encontrada.');
+      const { data: turns } = await db.from('ai_turns')
+        .select('id, conversation_id, outcome, handoff, tools, sent_text, flags, booking_id, error, latency_ms, model, created_at')
+        .eq('workspace_id', id).order('created_at', { ascending: false }).limit(30);
       const { data: sugg } = await db.from('ai_suggestions').select('status, outcome')
         .eq('workspace_id', id).gte('created_at', new Date(Date.now() - 30 * 864e5).toISOString()).limit(10000);
       const suggestions = { total: 0, sent: 0, sent_edited: 0, errors: 0 };
@@ -119,7 +122,7 @@ async function handle(db: SupabaseClient, me: Me, action: string, b: Record<stri
         models[k].calls++; models[k].cost_usd += Number(u.cost_usd); models[k].credits += Number(u.credits);
         models[k].input += u.input_tokens; models[k].output += u.output_tokens;
       }
-      return { workspace: ws, channel, wallet, ledger: ledger || [], usage, alerts: alerts || [], breakdown: models, suggestions };
+      return { workspace: ws, channel, wallet, ledger: ledger || [], usage, alerts: alerts || [], breakdown: models, suggestions, turns: turns || [] };
     }
 
     case 'channel_check': {
@@ -315,13 +318,13 @@ async function handle(db: SupabaseClient, me: Me, action: string, b: Record<stri
 
     case 'settings_save': {
       need(me, ['owner']);
-      const allowed = ['credits_per_usd', 'wallet_low_percent', 'alert_emails', 'copilot_model'];
+      const allowed = ['credits_per_usd', 'wallet_low_percent', 'alert_emails', 'copilot_model', 'auto_model'];
       for (const [key, value] of Object.entries((b.settings || {}) as Record<string, unknown>)) {
         if (!allowed.includes(key)) continue;
-        if (key === 'copilot_model') {
+        if (key === 'copilot_model' || key === 'auto_model') {
           const v = value as { provider?: string; model?: string };
           const { data: price } = await db.from('model_prices').select('model').eq('provider', String(v?.provider)).eq('model', String(v?.model)).maybeSingle();
-          if (!price) throw new HttpError(400, 'invalid_model', 'Modelo desconhecido para o copiloto.');
+          if (!price) throw new HttpError(400, 'invalid_model', 'Modelo de IA desconhecido.');
         }
         await db.from('platform_settings').update({ value, updated_at: new Date().toISOString(), updated_by: me.id }).eq('key', key);
       }

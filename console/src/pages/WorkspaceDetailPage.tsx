@@ -29,6 +29,19 @@ type Detail = {
   alerts: Alert[];
   breakdown: Record<string, { calls: number; cost_usd: number; credits: number; input: number; output: number }>;
   suggestions?: { total: number; sent: number; sent_edited: number; errors: number };
+  turns?: Turn[];
+};
+type Turn = {
+  id: string; outcome: 'sent' | 'fallback' | 'skipped' | 'error'; handoff: boolean; sent_text: string | null; error: string | null;
+  tools: { name: string; summary?: string }[]; booking_id: string | null; latency_ms: number | null; model: string; created_at: string;
+};
+const TURN_LABEL: Record<Turn['outcome'], { label: string; tone: 'ok' | 'warn' | 'bad' }> = {
+  sent: { label: 'Respondeu', tone: 'ok' }, fallback: { label: 'Passou para a equipe', tone: 'warn' },
+  skipped: { label: 'Não respondeu', tone: 'warn' }, error: { label: 'Erro', tone: 'bad' },
+};
+const TOOL_LABEL: Record<string, string> = {
+  verificar_horarios: 'consultou agenda', agendar: 'agendou', meus_agendamentos: 'viu agendamentos',
+  cancelar_agendamento: 'cancelou', passar_para_equipe: 'chamou a equipe',
 };
 type Pkg = { id: string; name: string; credits: number; price_brl: number; active: boolean };
 type Template = { name: string; language: string; category: string; status: string; body: string };
@@ -165,6 +178,34 @@ export default function WorkspaceDetailPage() {
                 })}
               </tbody>
             </table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="mt-4 shadow-card">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Atendimento automático</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Modo da IA: <b className="text-foreground">{({ off: 'Desligada', copilot: 'Sugerir resposta', auto: 'Automático' } as Record<string, string>)[String((data.workspace as { ai_mode?: string }).ai_mode)] || '—'}</b> (a empresa escolhe no produto).
+          </p>
+        </CardHeader>
+        <CardContent>
+          {!data.turns?.length ? <p className="text-sm text-muted-foreground">Nenhuma resposta automática ainda.</p> : (
+            <ul className="divide-y rounded-lg border">
+              {data.turns.map((t) => (
+                <li key={t.id} className="space-y-1 px-4 py-2.5 text-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusPill tone={TURN_LABEL[t.outcome].tone}>{TURN_LABEL[t.outcome].label}</StatusPill>
+                    {t.handoff && <StatusPill tone="warn">Equipe chamada</StatusPill>}
+                    {t.booking_id && <StatusPill tone="ok">Agenda alterada</StatusPill>}
+                    <span className="text-xs text-muted-foreground">{dateTime(t.created_at)} · {t.model}{t.latency_ms ? ` · ${(t.latency_ms / 1000).toFixed(1)}s` : ''}</span>
+                  </div>
+                  {t.tools.length > 0 && <p className="text-xs text-muted-foreground">Ações: {t.tools.map((x) => TOOL_LABEL[x.name] || x.name).join(', ')}</p>}
+                  {t.sent_text && <p className="whitespace-pre-wrap">{t.sent_text}</p>}
+                  {t.error && <p className="text-xs text-[hsl(var(--danger-text))]">{t.error}</p>}
+                </li>
+              ))}
+            </ul>
           )}
         </CardContent>
       </Card>

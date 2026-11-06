@@ -3,6 +3,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 import { verifySignature } from '../_shared/hmac.ts';
 import { dispatchAppEvents } from '../_shared/dispatch.ts';
+import { autoReply } from '../_shared/auto-runner.ts';
 
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
@@ -35,5 +36,12 @@ Deno.serve(async (req) => {
   const bg = typeof EdgeRuntime !== 'undefined' ? EdgeRuntime : null;
   const job = dispatchAppEvents(rpc).catch((e) => console.error('dispatch', (e as Error).message));
   if (bg?.waitUntil) bg.waitUntil(job); else await job;
+
+  // Mensagem de cliente: se a empresa está no modo automático, a IA responde (em segundo plano).
+  const convId = (data as { conversation_id?: string })?.conversation_id;
+  if (event?.event === 'message.received' && convId && !(data as { duplicate?: boolean })?.duplicate) {
+    const ai = autoReply(admin, convId).catch((e) => console.error('auto_reply', (e as Error).message));
+    if (bg?.waitUntil) bg.waitUntil(ai); else await ai;
+  }
   return reply({ ok: true });
 });

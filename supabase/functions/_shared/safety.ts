@@ -102,3 +102,14 @@ export function checkSuggestion(input: SafetyInput): SafetyResult {
     blocked: flags.has('hidden_data'),
   };
 }
+
+/** Valores em reais citados na mensagem que não aparecem nas fontes (preço inventado). */
+export function unsupportedMoney(draft: string, sources: string[]): string[] {
+  const allowed = new Set(sources.flatMap(numbersIn));
+  const out: string[] = [];
+  for (const m of draft.matchAll(/r\$\s*(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:,\d{1,2})?)/gi)) {
+    const n = String(Number(m[1].replace(/\./g, '').replace(',', '.')));
+    if (!allowed.has(n)) out.push(n);
+  }
+  return out;
+}
