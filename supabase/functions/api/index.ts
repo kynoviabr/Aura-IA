@@ -168,7 +168,7 @@ async function route(req: Request, db: SupabaseClient): Promise<Response> {
       p_conversation_id: c.id, p_provider_message_id: providerId, p_body: text, p_source: 'human', p_sent_by: str(b.sentBy, 120) || null,
     });
     if (error) throw new HttpError(500, 'db_error', error.message);
-    return json({ message: { id, status: 'sent' } }, 201);
+    return json({ message: { id, status: 'sent', body: text } }, 201);
   }
 
   // ---------- Modelos aprovados ----------
@@ -222,11 +222,12 @@ async function route(req: Request, db: SupabaseClient): Promise<Response> {
       if (error) throw new HttpError(500, 'db_error', error.message);
       conv = created;
     }
-    const { error } = await db.rpc('aura_record_outgoing', {
+    const { data: messageId, error } = await db.rpc('aura_record_outgoing', {
       p_conversation_id: conv!.id, p_provider_message_id: providerMessageId, p_body: preview, p_source: 'template', p_sent_by: str(b.sentBy, 120) || null,
     });
     if (error) throw new HttpError(500, 'db_error', error.message);
-    return json({ conversationId: conv!.id }, 201);
+    const { data: contactRow } = await db.from('conversations').select('contact_id').eq('id', conv!.id).single();
+    return json({ conversationId: conv!.id, contactId: contactRow?.contact_id ?? null, message: { id: messageId, status: 'sent', body: preview } }, 201);
   }
 
   // ---------- Contato: o produto diz quem é (lead, paciente, cliente) ----------

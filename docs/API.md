@@ -14,10 +14,10 @@ Empresas são endereçadas pelo id delas no produto (`:ext`, ex.: `clinic_id` do
 | GET | `/v1/workspaces/:ext/conversations?limit&before&contact_ref` | Lista de conversas |
 | GET | `/v1/conversations/:id` | Conversa (com `window_open`) |
 | GET | `/v1/conversations/:id/messages` | Mensagens |
-| POST | `/v1/conversations/:id/messages` | Responder com texto (até 24h) `{ text, sentBy? }` |
+| POST | `/v1/conversations/:id/messages` | Responder com texto (até 24h) `{ text, sentBy? }` → `{ message: { id, status, body } }` |
 | POST | `/v1/conversations/:id/read` | Marcar como lida |
 | GET | `/v1/workspaces/:ext/templates` | Modelos aprovados pela Meta |
-| POST | `/v1/workspaces/:ext/templates/send` | Enviar modelo `{ conversationId? \| phone, templateName, language, params, templateBody?, contact?{ name, externalType, externalRef }, sentBy? }` |
+| POST | `/v1/workspaces/:ext/templates/send` | Enviar modelo `{ conversationId? \| phone, templateName, language, params, templateBody?, contact?{ name, externalType, externalRef }, sentBy? }` → `{ conversationId, contactId, message: { id, status, body } }` |
 | PATCH | `/v1/contacts/:id` | Dizer quem é o contato no produto `{ name?, externalType?, externalRef? }` |
 
 Erros: `{ "error": { "code": "window_closed", "message": "..." } }`.
