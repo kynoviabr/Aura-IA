@@ -21,7 +21,7 @@ function priceText(s: CatalogService): string {
 }
 
 /** Dados da empresa em texto, para a IA. Só entra o que o produto respondeu. */
-export function businessContext(catalog: Catalog | null, info: BusinessInfo | null): string {
+export function businessContext(catalog: Catalog | null, info: BusinessInfo | null, opts: { withIds?: boolean } = {}): string {
   const lines: string[] = [];
   if (info) {
     if (info.name) lines.push(`Empresa: ${info.name}`);
@@ -49,7 +49,7 @@ export function businessContext(catalog: Catalog | null, info: BusinessInfo | nu
         s.durationMinutes ? `${s.durationMinutes} min por sessão` : '',
         s.sessions && s.sessions > 1 ? `${s.sessions} sessões` : '',
       ].filter(Boolean).join(', ');
-      lines.push(`- ${s.name}: ${priceText(s)}${extra ? ` · ${extra}` : ''}${s.description ? ` · ${s.description.slice(0, 300)}` : ''}`);
+      lines.push(`- ${s.name}${opts.withIds && s.id ? ` [servico_id: ${s.id}]` : ''}: ${priceText(s)}${extra ? ` · ${extra}` : ''}${s.description ? ` · ${s.description.slice(0, 300)}` : ''}`);
     }
   }
   if (catalog?.packages?.length) {

@@ -15,7 +15,7 @@ import { FLAG_TEXT } from '../_shared/safety.ts';
 type App = { id: string; slug: string; name: string };
 type Workspace = { id: string; app_id: string; external_id: string; name: string; timezone: string };
 
-const CONV_FIELDS = 'id, status, last_message_at, last_message_preview, last_message_direction, last_incoming_at, unread_count, created_at, contact:contacts(id, phone, name, external_type, external_ref)';
+const CONV_FIELDS = 'id, status, last_message_at, last_message_preview, last_message_direction, last_incoming_at, unread_count, ai_paused_until, ai_pause_reason, created_at, contact:contacts(id, phone, name, external_type, external_ref)';
 const MSG_FIELDS = 'id, direction, source, sent_by, body, attachments, status, error, sent_at';
 
 function str(v: unknown, max = 500): string {
@@ -142,6 +142,21 @@ async function route(req: Request, db: SupabaseClient): Promise<Response> {
     return json({ workspace: data });
   }
 
+  // ---------- Modo da IA da empresa: off (desligada), copilot (sugere) ou auto (responde sozinha) ----------
+  if (m === 'GET' && (p = match('v1/workspaces/:ext/ai', parts))) {
+    const ws = await workspaceOf(db, app, p.ext) as Workspace & { ai_mode: string };
+    return json({ mode: ws.ai_mode });
+  }
+
+  if (m === 'PUT' && (p = match('v1/workspaces/:ext/ai', parts))) {
+    const ws = await workspaceOf(db, app, p.ext);
+    const mode = str(b.mode, 20);
+    if (!['off', 'copilot', 'auto'].includes(mode)) throw new HttpError(400, 'invalid_mode', 'Modo inválido (off, copilot ou auto).');
+    const { error } = await db.from('workspaces').update({ ai_mode: mode, updated_at: new Date().toISOString() }).eq('id', ws.id);
+    if (error) throw new HttpError(500, 'db_error', error.message);
+    return json({ mode });
+  }
+
   // ---------- Canal (número de WhatsApp) ----------
   if (m === 'GET' && (p = match('v1/workspaces/:ext/channel', parts))) {
     const ws = await workspaceOf(db, app, p.ext);
@@ -221,6 +236,17 @@ async function route(req: Request, db: SupabaseClient): Promise<Response> {
     return json({ ok: true });
   }
 
+  // Pausar ou devolver a conversa para a IA (modo automático).
+  if (m === 'POST' && (p = match('v1/conversations/:id/ai', parts))) {
+    const c = await conversationOf(db, app, p.id);
+    const pause = b.paused !== false;
+    const hours = Math.min(Math.max(Number(b.hours) || 24, 1), 720);
+    const { error } = await db.rpc('aura_pause_ai', { p_conversation_id: c.id, p_hours: pause ? hours : 0, p_reason: str(b.reason, 300) || 'Pausada pela equipe', p_notify: false });
+    if (error) throw new HttpError(500, 'db_error', error.message);
+    const { data } = await db.from('conversations').select('ai_paused_until, ai_pause_reason').eq('id', c.id).single();
+    return json({ ai: data });
+  }
+
   if (m === 'POST' && (p = match('v1/conversations/:id/suggest', parts))) {
     const c = await conversationOf(db, app, p.id);
     return json(await suggest(db, app, c));
@@ -239,6 +265,11 @@ async function route(req: Request, db: SupabaseClient): Promise<Response> {
       p_conversation_id: c.id, p_provider_message_id: providerId, p_body: text, p_source: 'human', p_sent_by: str(b.sentBy, 120) || null,
     });
     if (error) throw new HttpError(500, 'db_error', error.message);
+    // Uma pessoa respondeu: no modo automático a IA sai desta conversa por 12h (a equipe pode devolver antes).
+    const { data: wsMode } = await db.from('workspaces').select('ai_mode').eq('id', c.workspace_id).single();
+    if (wsMode?.ai_mode === 'auto') {
+      await db.rpc('aura_pause_ai', { p_conversation_id: c.id, p_hours: 12, p_reason: 'Uma pessoa da equipe respondeu', p_notify: false });
+    }
     // Mensagem que partiu de uma sugestão do copiloto: registra se foi usada igual ou editada.
     if (b.suggestionId) {
       await db.rpc('aura_mark_suggestion_used', { p_suggestion_id: str(b.suggestionId, 64), p_conversation_id: c.id, p_message_id: id, p_sent_text: text });

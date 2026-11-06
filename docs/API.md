@@ -17,6 +17,8 @@ Empresas são endereçadas pelo id delas no produto (`:ext`, ex.: `clinic_id` do
 | POST | `/v1/conversations/:id/messages` | Responder com texto (até 24h) `{ text, sentBy?, suggestionId? }` → `{ message: { id, status, body } }`. Mande `suggestionId` quando a mensagem veio do copiloto |
 | POST | `/v1/conversations/:id/suggest` | Copiloto: sugere a próxima mensagem (não envia) → `{ suggestion: { id, text, outcome, handoff, flags: [{ code, text }], sources: { catalog, businessInfo } } }` |
 | POST | `/v1/conversations/:id/read` | Marcar como lida |
+| GET/PUT | `/v1/workspaces/:ext/ai` | Modo da IA da empresa `{ mode: "off" \| "copilot" \| "auto" }` |
+| POST | `/v1/conversations/:id/ai` | Pausar a IA nesta conversa `{ paused: true, hours?, reason? }` ou devolver `{ paused: false }` |
 | GET | `/v1/workspaces/:ext/templates?status=all` | Modelos aprovados pela Meta (com `status=all`, também os em revisão e recusados) |
 | POST | `/v1/workspaces/:ext/templates/standard` | Cria os modelos padrão que faltam (também feito automaticamente ao conectar o número) |
 | POST | `/v1/workspaces/:ext/templates/send` | Enviar modelo `{ conversationId? \| phone, templateName, language, params, templateBody?, contact?{ name, externalType, externalRef }, sentBy? }` → `{ conversationId, contactId, message: { id, status, body } }` |
@@ -92,3 +94,30 @@ O caminho é o da URL pedida (ex.: `/functions/v1/aura-api/aura/catalog`). Respo
   "faq": [{ "question": "Atende sábado?", "answer": "Sim, das 9h às 13h." }], "notes": "…" }
 ```
 Todos os campos são opcionais: a IA só usa o que vier e diz que vai confirmar com a equipe o que faltar.
+
+## Atendimento automático (Fases 3 e 4)
+
+Com a empresa em `mode: "auto"`, cada mensagem de cliente dispara uma resposta da IA (espera ~4s para juntar mensagens seguidas).
+A IA consulta catálogo, dados da empresa e a **agenda** do produto, oferece horários, pede confirmação e só então marca.
+As mensagens da IA chegam ao produto como `message.sent` com `message.source = "ai"`.
+
+- Uma pessoa respondeu pelo produto (`POST /v1/conversations/:id/messages`): a IA pausa nesta conversa por 12h.
+- A IA pede ajuda (reclamação, saúde, pedido de pessoa, dúvida que não resolve): responde com gentileza, pausa por 24h e envia
+  `conversation.handoff_requested` `{ conversation_id, contact, reason }`.
+- Possível urgência de saúde: mensagem fixa (procurar pronto-socorro / 192) sem passar pela IA, e equipe avisada.
+- Travas: preço que não está nos dados, orientação médica, dado interno ou "agendei" sem a agenda confirmar → mensagem segura e equipe avisada.
+- Cada resposta fica registrada no Console (empresa > Atendimento automático), com as ações feitas e o custo.
+
+### Agenda na API padrão do produto
+
+`contact` = `{ type, ref, phone, name }` (type/ref vêm de PATCH /v1/contacts; sem ref o produto acha pelo telefone ou cria um lead).
+Horários com fuso explícito (ex.: `2026-11-10T14:00:00-03:00`).
+
+| Método | Rota | Corpo / resposta |
+|---|---|---|
+| GET | `/aura/availability?serviceId&from&to&professionalId?` | `from`/`to` = AAAA-MM-DD (até 14 dias) → `{ timezone, slots: [{ start, end, professionalId, professionalName }] }` |
+| POST | `/aura/bookings` | `{ serviceId, start, professionalId, contact, idempotencyKey }` → `201 { booking }`; horário ocupado → `409 { error: "slot_unavailable" }` |
+| POST | `/aura/bookings/search` | `{ contact }` → `{ bookings: [...] }` (próximos horários) |
+| POST | `/aura/bookings/:id/cancel` | `{ contact, reason }` → `{ booking }` |
+
+`booking` = `{ id, start, end, status, serviceName, professionalName }`. O produto revalida o horário ao marcar.

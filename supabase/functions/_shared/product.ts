@@ -5,7 +5,7 @@
  */
 import { hmacHex } from './hmac.ts';
 
-export type ProductResult<T> = { status: 'ok'; data: T } | { status: 'unsupported' | 'error'; error: string };
+export type ProductResult<T> = { status: 'ok'; data: T } | { status: 'unsupported' | 'error'; error: string; code?: string };
 
 export type CatalogService = {
   id?: string;
@@ -31,6 +31,15 @@ export type BusinessInfo = {
   professionals?: { name: string; specialty?: string | null }[];
   faq?: { question: string; answer: string }[];
   notes?: string | null;
+};
+
+/** Quem é o cliente no produto. Sem ref, o produto acha pelo telefone (ou cria um lead). */
+export type ProductContact = { type?: string | null; ref?: string | null; phone: string; name?: string | null };
+
+export type Slot = { start: string; end: string; professionalId: string; professionalName?: string | null };
+export type Booking = {
+  id: string; start: string; end?: string; status: string;
+  serviceName?: string | null; professionalName?: string | null;
 };
 
 export function signingPayload(timestamp: string, method: string, pathAndQuery: string, body: string): string {
@@ -66,7 +75,11 @@ export class ProductClient {
       });
       const raw = await res.text();
       if (res.status === 404 || res.status === 501) return { status: 'unsupported', error: `O produto não oferece ${path}.` };
-      if (!res.ok) return { status: 'error', error: `Produto respondeu ${res.status}: ${raw.slice(0, 200)}` };
+      if (!res.ok) {
+        let code: string | undefined;
+        try { code = String((JSON.parse(raw) as { error?: unknown }).error || '') || undefined; } catch { /* corpo sem JSON */ }
+        return { status: 'error', error: `Produto respondeu ${res.status}: ${raw.slice(0, 200)}`, code };
+      }
       return { status: 'ok', data: (raw ? JSON.parse(raw) : {}) as T };
     } catch (e) {
       return { status: 'error', error: `Sem resposta do produto: ${(e as Error).message}` };
@@ -75,4 +88,21 @@ export class ProductClient {
 
   catalog() { return this.call<Catalog>('GET', '/aura/catalog'); }
   businessInfo() { return this.call<BusinessInfo>('GET', '/aura/business-info'); }
+
+  availability(q: { serviceId: string; from: string; to: string; professionalId?: string }) {
+    const p = new URLSearchParams({ serviceId: q.serviceId, from: q.from, to: q.to, ...(q.professionalId ? { professionalId: q.professionalId } : {}) });
+    return this.call<{ timezone?: string; slots: Slot[] }>('GET', `/aura/availability?${p}`);
+  }
+
+  createBooking(b: { serviceId: string; start: string; professionalId: string; contact: ProductContact; idempotencyKey: string }) {
+    return this.call<{ booking: Booking }>('POST', '/aura/bookings', b, 10000);
+  }
+
+  listBookings(contact: ProductContact) {
+    return this.call<{ bookings: Booking[] }>('POST', '/aura/bookings/search', { contact });
+  }
+
+  cancelBooking(id: string, contact: ProductContact, reason: string) {
+    return this.call<{ booking: Booking }>('POST', `/aura/bookings/${encodeURIComponent(id)}/cancel`, { contact, reason }, 10000);
+  }
 }

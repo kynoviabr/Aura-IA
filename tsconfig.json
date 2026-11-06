@@ -11,5 +11,5 @@
     "types": []
   },
   "include": ["supabase/functions/_shared/**/*.ts", "tests/unit/**/*.ts"],
-  "exclude": ["supabase/functions/_shared/ai-clients.ts"]
+  "exclude": ["supabase/functions/_shared/ai-clients.ts", "supabase/functions/_shared/auto-runner.ts"]
 }

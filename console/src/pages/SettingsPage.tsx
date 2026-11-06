@@ -40,6 +40,7 @@ export default function SettingsPage() {
   const [lowPct, setLowPct] = useState('');
   const [emails, setEmails] = useState('');
   const [copilot, setCopilot] = useState('anthropic|claude-haiku-5-5');
+  const [auto, setAuto] = useState('anthropic|claude-sonnet-5-5');
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('operator');
   useEffect(() => {
@@ -49,6 +50,8 @@ export default function SettingsPage() {
     setEmails(((data.settings.alert_emails as string[]) || []).join(', '));
     const cm = data.settings.copilot_model as { provider?: string; model?: string } | undefined;
     if (cm?.provider && cm.model) setCopilot(`${cm.provider}|${cm.model}`);
+    const am = data.settings.auto_model as { provider?: string; model?: string } | undefined;
+    if (am?.provider && am.model) setAuto(`${am.provider}|${am.model}`);
   }, [data]);
   const fail = (e: unknown) => toast({ title: 'Não foi possível', description: (e as Error).message, variant: 'destructive' });
   const save = useMutation({
@@ -56,6 +59,7 @@ export default function SettingsPage() {
       credits_per_usd: Number(rate), wallet_low_percent: Number(lowPct),
       alert_emails: emails.split(/[,\s;]+/).map((s) => s.trim()).filter(Boolean),
       copilot_model: { provider: copilot.split('|')[0], model: copilot.split('|')[1] },
+      auto_model: { provider: auto.split('|')[0], model: auto.split('|')[1] },
     } }),
     onSuccess: () => { toast({ title: 'Parâmetros salvos' }); qc.invalidateQueries({ queryKey: ['settings'] }); },
     onError: fail,
@@ -89,6 +93,11 @@ export default function SettingsPage() {
                 {COPILOT_MODELS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
               </select>
               <p className="text-xs text-muted-foreground">O provedor precisa estar ligado em Provedores de IA.</p></div>
+            <div className="space-y-1.5"><Label>Modelo do atendimento automático</Label>
+              <select disabled={!owner} value={auto} onChange={(e) => setAuto(e.target.value)} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+                {COPILOT_MODELS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+              <p className="text-xs text-muted-foreground">Responde sozinho e marca horários. Recomendado: um modelo "mais caprichado".</p></div>
             {owner && <div className="md:col-span-3"><BrandButton onClick={() => save.mutate()} disabled={save.isPending}>Salvar parâmetros</BrandButton></div>}
           </CardContent></Card>
         </TabsContent>
