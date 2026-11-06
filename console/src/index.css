@@ -1,0 +1,263 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ========================================================
+       STRIPE-INSPIRED DESIGN SYSTEM (HSL tokens)
+       Hex equivalents documented in comments for reference.
+       Values are HSL components for use as hsl(var(--token)).
+       ======================================================== */
+
+    /* BACKGROUNDS */
+    --background: 210 38% 97%;        /* #f6f9fc - page */
+    --foreground: 210 72% 15%;        /* #0a2540 - primary text */
+    --bg-navy: 210 72% 15%;           /* #0a2540 */
+    --bg-page: 210 38% 97%;           /* #f6f9fc */
+    --bg-surface: 0 0% 100%;          /* #ffffff */
+    --bg-subtle: 210 38% 96%;         /* #f0f5fa */
+
+    --card: 0 0% 100%;
+    --card-foreground: 210 72% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 72% 15%;
+
+    /* BRAND - Stripe purple (default; overridden per clinic via BrandingContext) */
+    --primary: 243 100% 68%;          /* #635bff */
+    --primary-foreground: 0 0% 100%;
+    --primary-dark: 243 75% 59%;      /* #4f46e5 */
+    --primary-light: 243 100% 95%;    /* #e8e7ff */
+
+    --color-purple: 243 100% 68%;
+    --color-purple-dark: 243 75% 59%;
+    --color-purple-light: 243 100% 95%;
+    --color-cyan: 190 100% 50%;       /* #00d4ff */
+    --color-green: 153 100% 42%;      /* #00d97e */
+
+    /* SECONDARY - subtle surface */
+    --secondary: 210 38% 96%;         /* #f0f5fa */
+    --secondary-foreground: 210 72% 15%;
+
+    --muted: 210 38% 96%;
+    --muted-foreground: 213 19% 33%;  /* #425466 */
+    --text-secondary: 213 19% 33%;    /* #425466 */
+    --text-muted: 211 17% 57%;        /* #8898aa */
+
+    /* ACCENT - using Stripe cyan as accent default */
+    --accent: 190 100% 50%;
+    --accent-foreground: 210 72% 15%;
+
+    /* SEMANTIC */
+    --destructive: 348 78% 49%;       /* #df1b41 */
+    --destructive-foreground: 0 0% 100%;
+    --danger-bg: 343 71% 94%;         /* #fce4ec */
+    --danger-text: 348 78% 49%;       /* #df1b41 */
+
+    --success: 152 79% 27%;           /* #0e7a45 */
+    --success-foreground: 0 0% 100%;
+    --success-bg: 144 64% 89%;        /* #d4f5e2 */
+
+    --warning: 31 100% 29%;           /* #925000 */
+    --warning-foreground: 0 0% 100%;
+    --warning-bg: 48 100% 90%;        /* #fff3cd */
+
+    --info: 243 75% 59%;
+    --info-foreground: 0 0% 100%;
+    --info-bg: 243 100% 95%;
+
+    /* BORDERS */
+    --border: 214 32% 91%;            /* #e3e8ee */
+    --input: 214 32% 91%;
+    --border-hover: 214 14% 79%;      /* #c1c9d2 */
+    --ring: 243 100% 68%;             /* purple focus ring */
+
+    /* RADIUS - Stripe scale */
+    --radius: 0.625rem;               /* 10px - card default */
+    --radius-chip: 4px;
+    --radius-btn: 6px;
+    --radius-card: 10px;
+    --radius-modal: 20px;
+    --radius-pill: 9999px;
+
+    /* BRAND tokens (overridden dynamically per clinic) */
+    --brand-primary: 243 100% 68%;
+    --brand-secondary: 210 38% 96%;
+    --brand-accent: 190 100% 50%;
+    --brand-primary-contrast: #ffffff;
+
+    /* GRADIENTS - reserved for hero/marketing only */
+    --gradient-primary: linear-gradient(135deg, hsl(243 100% 68%), hsl(243 75% 59%));
+    --gradient-accent: linear-gradient(135deg, hsl(190 100% 50%), hsl(243 100% 68%));
+    --gradient-hero: linear-gradient(135deg, hsl(210 72% 15%) 0%, hsl(243 75% 25%) 100%);
+    --gradient-surface: linear-gradient(180deg, hsl(210 38% 97%), hsl(210 38% 95%));
+
+    /* SHADOWS - Stripe scale */
+    --shadow-sm: 0 2px 5px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.08);
+    --shadow-md: 0 8px 24px rgba(149, 157, 165, 0.15);
+    --shadow-lg: 0 16px 48px rgba(10, 37, 64, 0.12);
+    --shadow-xl: 0 24px 64px rgba(0, 0, 0, 0.32);
+    --shadow-focus: 0 0 0 3px rgba(99, 91, 255, 0.18);
+    --shadow-glow: 0 8px 24px rgba(99, 91, 255, 0.18);
+
+    /* TRANSITIONS */
+    --transition-base: 200ms ease;
+    --transition-modal: 250ms ease-out;
+    --transition-micro: 150ms ease;
+
+    /* FONTS */
+    --font-heading: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+    --font-mono: 'SF Mono', Menlo, Consolas, 'Courier New', monospace;
+
+    /* SIDEBAR - Stripe navy */
+    --sidebar-background: 210 72% 15%;          /* #0a2540 */
+    --sidebar-foreground: 0 0% 100%;
+    --sidebar-primary: 243 100% 68%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 210 50% 22%;              /* hover bg */
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 210 40% 25%;
+    --sidebar-ring: 243 100% 68%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--font-body);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+    @apply font-semibold;
+    letter-spacing: -0.015em;
+  }
+
+  h1 { letter-spacing: -0.025em; line-height: 1.1; }
+  h2 { letter-spacing: -0.02em; line-height: 1.15; }
+  h3 { letter-spacing: -0.01em; line-height: 1.3; }
+
+  /* Stripe-style monospace for IDs / contract numbers */
+  code, kbd, samp {
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+  }
+
+  /* Selection */
+  ::selection {
+    background: hsl(var(--primary) / 0.2);
+    color: hsl(var(--foreground));
+  }
+}
+
+@layer utilities {
+  /* Gradients (hero/marketing only) */
+  .gradient-primary {
+    background: var(--gradient-primary);
+  }
+  .gradient-accent {
+    background: var(--gradient-accent);
+  }
+  .gradient-hero {
+    background: var(--gradient-hero);
+  }
+  .gradient-surface {
+    background: var(--gradient-surface);
+  }
+
+  /* Shadow tokens */
+  .shadow-card {
+    box-shadow: var(--shadow-sm);
+  }
+  .shadow-card-hover {
+    box-shadow: var(--shadow-md);
+  }
+  .shadow-glow {
+    box-shadow: var(--shadow-glow);
+  }
+  .shadow-focus-ring {
+    box-shadow: var(--shadow-focus);
+  }
+
+  /* Stripe-style glass header (navy translucent) */
+  .glass {
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    background: hsl(0 0% 100% / 0.92);
+  }
+  .glass-navy {
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    background: hsl(var(--bg-navy) / 0.97);
+  }
+
+  /* Stripe-style label (uppercase micro) */
+  .label-stripe {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: hsl(var(--text-muted));
+  }
+
+  /* Stripe focus ring helper */
+  .focus-stripe:focus-visible {
+    outline: none;
+    box-shadow: var(--shadow-focus);
+  }
+
+  /* Skeleton shimmer */
+  .skeleton-shimmer {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--muted)) 0%,
+      hsl(var(--bg-subtle)) 50%,
+      hsl(var(--muted)) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s linear infinite;
+  }
+}
+
+/* ============ KEYFRAMES ============ */
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes modal-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(100%); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Respect motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

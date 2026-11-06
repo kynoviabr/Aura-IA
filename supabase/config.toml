@@ -9,3 +9,9 @@ verify_jwt = false
 
 [functions.dispatch-events]
 verify_jwt = false
+
+[functions.health-check]
+verify_jwt = false
+
+[functions.console-api]
+verify_jwt = true
