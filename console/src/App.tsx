@@ -15,6 +15,7 @@ const WorkspaceDetailPage = lazy(() => import('@/pages/WorkspaceDetailPage'));
 const AppsPage = lazy(() => import('@/pages/AppsPage'));
 const ProvidersPage = lazy(() => import('@/pages/ProvidersPage'));
 const CreditsPage = lazy(() => import('@/pages/CreditsPage'));
+const EvalPage = lazy(() => import('@/pages/EvalPage'));
 const AlertsPage = lazy(() => import('@/pages/AlertsPage'));
 const SettingsPage = lazy(() => import('@/pages/SettingsPage'));
 
@@ -47,6 +48,7 @@ export default function App() {
                   <Route path="aplicacoes" element={<AppsPage />} />
                   <Route path="ia" element={<ProvidersPage />} />
                   <Route path="creditos" element={<CreditsPage />} />
+                  <Route path="avaliacao" element={<EvalPage />} />
                   <Route path="alertas" element={<AlertsPage />} />
                   <Route path="configuracoes" element={<SettingsPage />} />
                   <Route path="*" element={<Navigate to="/" replace />} />

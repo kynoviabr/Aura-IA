@@ -6,6 +6,10 @@ import { corsHeaders, errorResponse, HttpError, json } from '../_shared/http.ts'
 import { ZernioClient } from '../_shared/zernio.ts';
 import { ensureStandardTemplates } from '../_shared/templates.ts';
 import { testProviderKey } from '../_shared/providers.ts';
+import Anthropic from 'npm:@anthropic-ai/sdk@0.137.0';
+import OpenAI from 'npm:openai@7.39.0';
+import type { Clients } from '../_shared/llm.ts';
+import { EVAL_PAIRS, evalJobs, runJobs, SCENARIOS } from '../_shared/eval.ts';
 
 type Role = 'owner' | 'operator' | 'viewer';
 type Me = { id: string; email: string; role: Role };
@@ -36,6 +40,44 @@ async function rpc<T = unknown>(db: SupabaseClient, fn: string, args: Record<str
 
 async function audit(db: SupabaseClient, me: Me, action: string, targetType: string, targetId: string, detail: Record<string, unknown> = {}) {
   await db.from('audit_log').insert({ actor: me.id, actor_email: me.email, action, target_type: targetType, target_id: targetId, detail });
+}
+
+/** Clientes dos provedores de IA com as chaves guardadas no cofre. */
+async function aiClients(db: SupabaseClient): Promise<Clients> {
+  const [{ data: ak }, { data: ok }] = await Promise.all([
+    db.rpc('aura_get_provider_key', { p_provider: 'anthropic' }),
+    db.rpc('aura_get_provider_key', { p_provider: 'openai' }),
+  ]);
+  return {
+    anthropic: ak ? (new Anthropic({ apiKey: String(ak), maxRetries: 2 }) as unknown as Clients['anthropic']) : undefined,
+    openai: ok ? (new OpenAI({ apiKey: String(ok), maxRetries: 2 }) as unknown as Clients['openai']) : undefined,
+  };
+}
+
+/** Roda a prova em segundo plano: cada resposta é salva assim que chega. */
+async function runEval(db: SupabaseClient, runId: string, pair: string) {
+  try {
+    const clients = await aiClients(db);
+    await runJobs(evalJobs(EVAL_PAIRS[pair].models), clients, async (job, r) => {
+      await db.from('ai_eval_results').upsert({
+        run_id: runId, scenario_id: job.scenario.id, scenario_title: job.scenario.title, category: job.scenario.category,
+        expectation: job.scenario.expectation, provider: job.model.provider, model: job.model.model,
+        output: r.text, outcome: r.outcome, error: r.error || null, latency_ms: r.latencyMs,
+        input_tokens: r.inputTokens, output_tokens: r.outputTokens,
+      }, { onConflict: 'run_id,scenario_id,provider,model' });
+      // Custo real registrado no uso de IA (avaliação não cobra créditos de empresa).
+      const { data: usage } = await db.rpc('aura_record_ai_usage', {
+        p_workspace_id: null, p_conversation_id: null, p_feature: 'eval', p_provider: job.model.provider, p_model: job.model.model,
+        p_input: r.inputTokens, p_cached: r.cachedTokens, p_output: r.outputTokens, p_latency_ms: r.latencyMs,
+        p_outcome: r.outcome, p_error_code: r.error ? r.error.slice(0, 120) : null,
+      });
+      await db.from('ai_eval_results').update({ cost_usd: (usage as { cost_usd?: number })?.cost_usd ?? 0 })
+        .eq('run_id', runId).eq('scenario_id', job.scenario.id).eq('model', job.model.model);
+      await db.rpc('aura_eval_progress', { p_run_id: runId });
+    });
+  } catch (e) {
+    await db.from('ai_eval_runs').update({ status: 'failed', error: (e as Error).message, finished_at: new Date().toISOString() }).eq('id', runId);
+  }
 }
 
 function zernio() {
@@ -307,6 +349,51 @@ async function handle(db: SupabaseClient, me: Me, action: string, b: Record<stri
       if (id === me.id) throw new HttpError(400, 'self', 'Você não pode remover o próprio acesso.');
       await db.from('console_users').delete().eq('user_id', id);
       await audit(db, me, 'user_removed', 'console_user', id);
+      return { ok: true };
+    }
+
+    // ---------- Avaliação de IA (prova lado a lado) ----------
+    case 'eval_pairs':
+      return { pairs: Object.entries(EVAL_PAIRS).map(([id, p]) => ({ id, title: p.title, models: p.models })), scenarios: SCENARIOS.length };
+
+    case 'eval_start': {
+      need(me, WRITE);
+      const pair = str(b.pair, 20);
+      if (!EVAL_PAIRS[pair]) throw new HttpError(400, 'invalid_pair', 'Escolha a prova.');
+      const { data: running } = await db.from('ai_eval_runs').select('id').eq('status', 'running')
+        .gte('created_at', new Date(Date.now() - 10 * 60000).toISOString()).limit(1);
+      if (running?.length) throw new HttpError(409, 'eval_running', 'Já existe uma prova rodando. Aguarde terminar.');
+      const models = EVAL_PAIRS[pair].models;
+      const { data: run, error } = await db.from('ai_eval_runs').insert({
+        title: EVAL_PAIRS[pair].title, models, total: SCENARIOS.length * models.length, created_by: me.id, created_by_email: me.email,
+      }).select('id').single();
+      if (error) throw new HttpError(500, 'db_error', error.message);
+      const job = runEval(db, run.id, pair);
+      // @ts-ignore EdgeRuntime existe no Supabase: mantém a prova rodando depois de responder ao Console.
+      if (typeof EdgeRuntime !== 'undefined' && EdgeRuntime.waitUntil) EdgeRuntime.waitUntil(job); else await job;
+      await audit(db, me, 'eval_started', 'eval', run.id, { pair });
+      return { runId: run.id };
+    }
+
+    case 'eval_runs':
+      return { runs: (await db.from('ai_eval_runs').select('*').order('created_at', { ascending: false }).limit(30)).data || [] };
+
+    case 'eval_run': {
+      const id = str(b.id, 64);
+      const [{ data: run }, { data: results }] = await Promise.all([
+        db.from('ai_eval_runs').select('*').eq('id', id).maybeSingle(),
+        db.from('ai_eval_results').select('*').eq('run_id', id).order('scenario_id'),
+      ]);
+      if (!run) throw new HttpError(404, 'not_found', 'Prova não encontrada.');
+      const order = SCENARIOS.map((sc) => sc.id);
+      const scenarios = Object.fromEntries(SCENARIOS.map((sc) => [sc.id, sc.messages]));
+      return { run, results: (results || []).sort((x, y) => order.indexOf(x.scenario_id) - order.indexOf(y.scenario_id)), scenarios };
+    }
+
+    case 'eval_rate': {
+      need(me, WRITE);
+      const rating = b.rating === 1 || b.rating === -1 ? b.rating : null;
+      await db.from('ai_eval_results').update({ rating, rated_by: rating ? me.email : null }).eq('id', str(b.id, 64));
       return { ok: true };
     }
 

@@ -20,7 +20,7 @@ const ACTION_LABEL: Record<string, string> = {
   provider_key_set: 'Cadastrou chave de IA', provider_updated: 'Alterou provedor de IA', credits_granted: 'Adicionou créditos', wallet_updated: 'Alterou carteira',
   package_saved: 'Salvou pacote', app_created: 'Criou aplicação', app_updated: 'Alterou aplicação', app_key_rotated: 'Gerou nova chave de aplicação',
   events_retried: 'Reenviou avisos', alert_resolved: 'Resolveu alerta', settings_saved: 'Alterou parâmetros', user_invited: 'Convidou pessoa',
-  user_removed: 'Removeu pessoa', templates_created: 'Criou modelos de mensagem',
+  user_removed: 'Removeu pessoa', templates_created: 'Criou modelos de mensagem', eval_started: 'Rodou avaliação de IA',
 };
 
 export default function SettingsPage() {

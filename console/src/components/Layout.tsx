@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
-  Activity, AppWindow, Bell, Building2, Coins, LayoutDashboard, LogOut, Menu, Settings, Sparkles, X,
+  Activity, AppWindow, Bell, Building2, Coins, FlaskConical, LayoutDashboard, LogOut, Menu, Settings, Sparkles, X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -14,6 +14,7 @@ const NAV: { to: string; icon: LucideIcon; label: string }[] = [
   { to: '/empresas', icon: Building2, label: 'Empresas e números' },
   { to: '/aplicacoes', icon: AppWindow, label: 'Aplicações' },
   { to: '/ia', icon: Sparkles, label: 'Provedores de IA' },
+  { to: '/avaliacao', icon: FlaskConical, label: 'Avaliação de IA' },
   { to: '/creditos', icon: Coins, label: 'Créditos e pacotes' },
   { to: '/alertas', icon: Bell, label: 'Alertas' },
   { to: '/configuracoes', icon: Settings, label: 'Configurações' },
