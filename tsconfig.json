@@ -10,5 +10,6 @@
     "lib": ["ES2022", "DOM"],
     "types": []
   },
-  "include": ["supabase/functions/_shared/**/*.ts", "tests/unit/**/*.ts"]
+  "include": ["supabase/functions/_shared/**/*.ts", "tests/unit/**/*.ts"],
+  "exclude": ["supabase/functions/_shared/ai-clients.ts"]
 }

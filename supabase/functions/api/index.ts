@@ -7,6 +7,10 @@ import { corsHeaders, errorResponse, HttpError, json, match, routeParts } from '
 import { isWindowOpen, phoneKey, renderTemplate, waNumber } from '../_shared/phone.ts';
 import { ZernioClient } from '../_shared/zernio.ts';
 import { ensureStandardTemplates } from '../_shared/templates.ts';
+import { aiClients } from '../_shared/ai-clients.ts';
+import { ProductClient, type ProductResult } from '../_shared/product.ts';
+import { businessContext, suggestReply, type HistoryMessage } from '../_shared/copilot.ts';
+import { FLAG_TEXT } from '../_shared/safety.ts';
 
 type App = { id: string; slug: string; name: string };
 type Workspace = { id: string; app_id: string; external_id: string; name: string; timezone: string };
@@ -52,6 +56,64 @@ async function conversationOf(db: SupabaseClient, app: App, conversationId: stri
     .eq('id', conversationId).maybeSingle();
   if (!data || data.workspace.app_id !== app.id) throw new HttpError(404, 'conversation_not_found', 'Conversa não encontrada.');
   return data;
+}
+
+type SourceStatus = 'ok' | 'unsupported' | 'error' | 'not_configured';
+const sourceStatus = (r: ProductResult<unknown> | null): SourceStatus => (r ? r.status : 'not_configured');
+
+/** Copiloto: sugere a próxima mensagem com os dados do produto e a conversa. Nunca envia sozinho. */
+async function suggest(db: SupabaseClient, app: App, conv: { id: string; workspace_id: string; workspace: { external_id: string } }) {
+  const { data: allowed } = await db.rpc('aura_ai_allowed', { p_workspace_id: conv.workspace_id });
+  if (!allowed) throw new HttpError(402, 'no_credits', 'A empresa está sem créditos de IA. Fale com a Kynovia para recarregar.');
+
+  const [{ data: setting }, { data: appRow }, { data: ws }, { data: msgs }] = await Promise.all([
+    db.from('platform_settings').select('value').eq('key', 'copilot_model').maybeSingle(),
+    db.from('apps').select('api_base_url, webhook_secret').eq('id', app.id).single(),
+    db.from('workspaces').select('timezone').eq('id', conv.workspace_id).single(),
+    db.from('messages').select('direction, body, attachments, sent_at').eq('conversation_id', conv.id)
+      .order('sent_at', { ascending: false }).limit(30),
+  ]);
+  const cfg = (setting?.value || {}) as { provider?: 'anthropic' | 'openai'; model?: string };
+  const provider = cfg.provider === 'openai' ? 'openai' : 'anthropic';
+  const model = cfg.model || 'claude-haiku-5-5';
+  const { data: prov } = await db.from('ai_providers').select('enabled, status').eq('provider', provider).maybeSingle();
+  if (!prov?.enabled) throw new HttpError(503, 'ai_disabled', 'A IA está desligada no momento.');
+
+  // Dados da empresa pela API padrão do produto (se o produto já oferece).
+  const product = appRow?.api_base_url && appRow.webhook_secret
+    ? new ProductClient(appRow.api_base_url, appRow.webhook_secret, conv.workspace.external_id) : null;
+  const [catalog, info] = product ? await Promise.all([product.catalog(), product.businessInfo()]) : [null, null];
+  const context = businessContext(catalog?.status === 'ok' ? catalog.data : null, info?.status === 'ok' ? info.data : null);
+  for (const r of [catalog, info]) if (r && r.status === 'error') console.error('product_api', app.slug, r.error);
+
+  const history = ((msgs || []) as HistoryMessage[]).reverse();
+  const s = await suggestReply(await aiClients(db), {
+    provider, model, context, history, now: new Date(), timezone: ws?.timezone || 'America/Sao_Paulo',
+  });
+  const r = s.result;
+  const outcome = r.outcome !== 'ok' ? r.outcome : s.safety.blocked ? 'blocked' : 'ok';
+  const { data: usage } = await db.rpc('aura_record_ai_usage', {
+    p_workspace_id: conv.workspace_id, p_conversation_id: conv.id, p_feature: 'copilot', p_provider: provider, p_model: model,
+    p_input: r.inputTokens, p_cached: r.cachedTokens, p_output: r.outputTokens, p_latency_ms: r.latencyMs,
+    p_outcome: outcome, p_error_code: r.error ? r.error.slice(0, 120) : null,
+  });
+  const sources = { catalog: sourceStatus(catalog), businessInfo: sourceStatus(info) };
+  const { data: row } = await db.from('ai_suggestions').insert({
+    workspace_id: conv.workspace_id, conversation_id: conv.id, usage_id: (usage as { usage_id?: string } | null)?.usage_id ?? null,
+    provider, model, suggestion: s.text, flags: s.safety.flags, handoff: s.safety.handoff, context_sources: sources, outcome,
+  }).select('id').single();
+
+  if (r.outcome === 'error') throw new HttpError(502, 'ai_error', 'A IA não respondeu agora. Tente de novo em instantes.');
+  return {
+    suggestion: {
+      id: row?.id ?? null,
+      text: s.text,
+      outcome,
+      handoff: s.safety.handoff,
+      flags: s.safety.flags.map((code) => ({ code, text: FLAG_TEXT[code] })),
+      sources,
+    },
+  };
 }
 
 function zernio(): ZernioClient {
@@ -159,6 +221,11 @@ async function route(req: Request, db: SupabaseClient): Promise<Response> {
     return json({ ok: true });
   }
 
+  if (m === 'POST' && (p = match('v1/conversations/:id/suggest', parts))) {
+    const c = await conversationOf(db, app, p.id);
+    return json(await suggest(db, app, c));
+  }
+
   if (m === 'POST' && (p = match('v1/conversations/:id/messages', parts))) {
     const c = await conversationOf(db, app, p.id);
     const text = str(b.text, 4000);
@@ -172,6 +239,10 @@ async function route(req: Request, db: SupabaseClient): Promise<Response> {
       p_conversation_id: c.id, p_provider_message_id: providerId, p_body: text, p_source: 'human', p_sent_by: str(b.sentBy, 120) || null,
     });
     if (error) throw new HttpError(500, 'db_error', error.message);
+    // Mensagem que partiu de uma sugestão do copiloto: registra se foi usada igual ou editada.
+    if (b.suggestionId) {
+      await db.rpc('aura_mark_suggestion_used', { p_suggestion_id: str(b.suggestionId, 64), p_conversation_id: c.id, p_message_id: id, p_sent_text: text });
+    }
     return json({ message: { id, status: 'sent', body: text } }, 201);
   }
 

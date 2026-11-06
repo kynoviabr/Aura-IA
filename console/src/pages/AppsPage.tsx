@@ -16,7 +16,7 @@ import { consoleApi } from '@/lib/api';
 import { ago, appState, dateTime, num } from '@/lib/format';
 
 type App = {
-  id: string; slug: string; name: string; api_key_prefix: string | null; webhook_url: string | null; is_active: boolean; created_at: string;
+  id: string; slug: string; name: string; api_key_prefix: string | null; webhook_url: string | null; api_base_url: string | null; is_active: boolean; created_at: string;
   last_delivery_ok_at: string | null; last_delivery_error_at: string | null; last_delivery_error: string | null; pending: number; failed: number; workspaces: number;
 };
 
@@ -64,6 +64,7 @@ export default function AppsPage() {
                 <div className="space-y-1 text-sm">
                   <p><span className="text-muted-foreground">Chave:</span> <code>{a.api_key_prefix}…</code></p>
                   <p className="truncate"><span className="text-muted-foreground">Avisos para:</span> {a.webhook_url || '—'}</p>
+                  <p className="truncate"><span className="text-muted-foreground">API do produto (dados para a IA):</span> {a.api_base_url || '—'}</p>
                   <p><span className="text-muted-foreground">Último aviso entregue:</span> {ago(a.last_delivery_ok_at)}</p>
                   {a.last_delivery_error && <p className="text-xs text-[hsl(var(--danger-text))]">Último erro ({ago(a.last_delivery_error_at)}): {a.last_delivery_error}</p>}
                   <p className="text-xs text-muted-foreground">{num(a.pending)} na fila · {num(a.failed)} com falha</p>
@@ -99,10 +100,11 @@ function AppDialog({ app, onClose, onCreated, onSaved }: { app: App | null; onCl
   const [name, setName] = useState(app?.name || '');
   const [slug, setSlug] = useState(app?.slug || '');
   const [url, setUrl] = useState(app?.webhook_url || '');
+  const [apiUrl, setApiUrl] = useState(app?.api_base_url || '');
   const [active, setActive] = useState(app?.is_active ?? true);
   const save = useMutation({
     mutationFn: async () => app
-      ? consoleApi('app_update', { id: app.id, name, webhookUrl: url, isActive: active })
+      ? consoleApi('app_update', { id: app.id, name, webhookUrl: url, apiBaseUrl: apiUrl, isActive: active })
       : consoleApi<{ secrets: { api_key: string; webhook_secret: string } }>('app_create', { name, slug, webhookUrl: url }),
     onSuccess: (r) => { onSaved(); onClose(); if (!app) onCreated((r as { secrets: { api_key: string; webhook_secret: string } }).secrets, name); else toast({ title: 'Salvo' }); },
     onError: (e) => toast({ title: 'Não foi possível', description: (e as Error).message, variant: 'destructive' }),
@@ -115,6 +117,7 @@ function AppDialog({ app, onClose, onCreated, onSaved }: { app: App | null; onCl
           <div className="space-y-1.5"><Label>Nome</Label><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="ex.: Belariz" /></div>
           {!app && <div className="space-y-1.5"><Label>Identificador</Label><Input value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} placeholder="ex.: belariz" /><p className="text-xs text-muted-foreground">Letras minúsculas, números e hífen. Não muda depois.</p></div>}
           <div className="space-y-1.5"><Label>Endereço de avisos (webhook)</Label><Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://…/functions/v1/aura-webhook" /></div>
+          {app && <div className="space-y-1.5"><Label>API do produto (dados para a IA)</Label><Input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} placeholder="https://…/functions/v1/aura-api" /><p className="text-xs text-muted-foreground">Onde a Aura busca catálogo e dados da empresa. Assinado com o mesmo segredo dos avisos.</p></div>}
           {app && <div className="flex items-center justify-between rounded-lg border p-3"><span className="text-sm">Aplicação ativa</span><Switch checked={active} onCheckedChange={setActive} /></div>}
           <BrandButton className="w-full" disabled={save.isPending || !name || (!app && !slug)} onClick={() => save.mutate()}>{save.isPending && <Loader2 className="h-4 w-4 animate-spin" />} {app ? 'Salvar' : 'Criar e gerar chaves'}</BrandButton>
         </div>
