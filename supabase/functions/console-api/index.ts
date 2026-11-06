@@ -6,9 +6,7 @@ import { corsHeaders, errorResponse, HttpError, json } from '../_shared/http.ts'
 import { ZernioClient } from '../_shared/zernio.ts';
 import { ensureStandardTemplates } from '../_shared/templates.ts';
 import { testProviderKey } from '../_shared/providers.ts';
-import Anthropic from 'npm:@anthropic-ai/sdk@0.137.0';
-import OpenAI from 'npm:openai@7.39.0';
-import type { Clients } from '../_shared/llm.ts';
+import { aiClients } from '../_shared/ai-clients.ts';
 import { EVAL_PAIRS, evalJobs, runJobs, SCENARIOS } from '../_shared/eval.ts';
 
 type Role = 'owner' | 'operator' | 'viewer';
@@ -40,18 +38,6 @@ async function rpc<T = unknown>(db: SupabaseClient, fn: string, args: Record<str
 
 async function audit(db: SupabaseClient, me: Me, action: string, targetType: string, targetId: string, detail: Record<string, unknown> = {}) {
   await db.from('audit_log').insert({ actor: me.id, actor_email: me.email, action, target_type: targetType, target_id: targetId, detail });
-}
-
-/** Clientes dos provedores de IA com as chaves guardadas no cofre. */
-async function aiClients(db: SupabaseClient): Promise<Clients> {
-  const [{ data: ak }, { data: ok }] = await Promise.all([
-    db.rpc('aura_get_provider_key', { p_provider: 'anthropic' }),
-    db.rpc('aura_get_provider_key', { p_provider: 'openai' }),
-  ]);
-  return {
-    anthropic: ak ? (new Anthropic({ apiKey: String(ak), maxRetries: 2 }) as unknown as Clients['anthropic']) : undefined,
-    openai: ok ? (new OpenAI({ apiKey: String(ok), maxRetries: 2 }) as unknown as Clients['openai']) : undefined,
-  };
 }
 
 /** Roda a prova em segundo plano: cada resposta é salva assim que chega. */
@@ -117,6 +103,15 @@ async function handle(db: SupabaseClient, me: Me, action: string, b: Record<stri
           .eq('workspace_id', id).gte('created_at', new Date(Date.now() - 30 * 864e5).toISOString()).limit(5000),
       ]);
       if (!ws) throw new HttpError(404, 'not_found', 'Empresa não encontrada.');
+      const { data: sugg } = await db.from('ai_suggestions').select('status, outcome')
+        .eq('workspace_id', id).gte('created_at', new Date(Date.now() - 30 * 864e5).toISOString()).limit(10000);
+      const suggestions = { total: 0, sent: 0, sent_edited: 0, errors: 0 };
+      for (const x of sugg || []) {
+        suggestions.total++;
+        if (x.status === 'sent') suggestions.sent++;
+        if (x.status === 'sent_edited') suggestions.sent_edited++;
+        if (x.outcome === 'error') suggestions.errors++;
+      }
       const models: Record<string, { calls: number; cost_usd: number; credits: number; input: number; output: number }> = {};
       for (const u of byFeature || []) {
         const k = `${u.feature} · ${u.model}`;
@@ -124,7 +119,7 @@ async function handle(db: SupabaseClient, me: Me, action: string, b: Record<stri
         models[k].calls++; models[k].cost_usd += Number(u.cost_usd); models[k].credits += Number(u.credits);
         models[k].input += u.input_tokens; models[k].output += u.output_tokens;
       }
-      return { workspace: ws, channel, wallet, ledger: ledger || [], usage, alerts: alerts || [], breakdown: models };
+      return { workspace: ws, channel, wallet, ledger: ledger || [], usage, alerts: alerts || [], breakdown: models, suggestions };
     }
 
     case 'channel_check': {
@@ -197,7 +192,7 @@ async function handle(db: SupabaseClient, me: Me, action: string, b: Record<stri
     // ---------- Aplicações conectadas ----------
     case 'apps': {
       const { data: apps } = await db.from('apps')
-        .select('id, slug, name, api_key_prefix, webhook_url, is_active, created_at, last_delivery_ok_at, last_delivery_error_at, last_delivery_error')
+        .select('id, slug, name, api_key_prefix, webhook_url, api_base_url, is_active, created_at, last_delivery_ok_at, last_delivery_error_at, last_delivery_error')
         .order('name');
       const { data: counts } = await db.from('app_events').select('app_id, status').in('status', ['pending', 'failed']).limit(10000);
       const { data: wss } = await db.from('workspaces').select('app_id');
@@ -224,10 +219,14 @@ async function handle(db: SupabaseClient, me: Me, action: string, b: Record<stri
     case 'app_update': {
       need(me, ['owner']);
       const url = str(b.webhookUrl, 500);
+      const apiUrl = str(b.apiBaseUrl, 500);
       if (url && !/^https:\/\//.test(url)) throw new HttpError(400, 'invalid_url', 'O endereço de avisos deve começar com https://');
-      const { error } = await db.from('apps').update({ name: str(b.name, 80), webhook_url: url || null, is_active: b.isActive !== false }).eq('id', str(b.id, 64));
+      if (apiUrl && !/^https:\/\//.test(apiUrl)) throw new HttpError(400, 'invalid_url', 'O endereço da API do produto deve começar com https://');
+      const { error } = await db.from('apps').update({
+        name: str(b.name, 80), webhook_url: url || null, api_base_url: apiUrl || null, is_active: b.isActive !== false,
+      }).eq('id', str(b.id, 64));
       if (error) throw new HttpError(400, 'db_error', error.message);
-      await audit(db, me, 'app_updated', 'app', str(b.id, 64), { webhook_url: url, is_active: b.isActive !== false });
+      await audit(db, me, 'app_updated', 'app', str(b.id, 64), { webhook_url: url, api_base_url: apiUrl, is_active: b.isActive !== false });
       return { ok: true };
     }
 
@@ -316,9 +315,14 @@ async function handle(db: SupabaseClient, me: Me, action: string, b: Record<stri
 
     case 'settings_save': {
       need(me, ['owner']);
-      const allowed = ['credits_per_usd', 'wallet_low_percent', 'alert_emails'];
+      const allowed = ['credits_per_usd', 'wallet_low_percent', 'alert_emails', 'copilot_model'];
       for (const [key, value] of Object.entries((b.settings || {}) as Record<string, unknown>)) {
         if (!allowed.includes(key)) continue;
+        if (key === 'copilot_model') {
+          const v = value as { provider?: string; model?: string };
+          const { data: price } = await db.from('model_prices').select('model').eq('provider', String(v?.provider)).eq('model', String(v?.model)).maybeSingle();
+          if (!price) throw new HttpError(400, 'invalid_model', 'Modelo desconhecido para o copiloto.');
+        }
         await db.from('platform_settings').update({ value, updated_at: new Date().toISOString(), updated_by: me.id }).eq('key', key);
       }
       await audit(db, me, 'settings_saved', 'settings', '*', (b.settings || {}) as Record<string, unknown>);

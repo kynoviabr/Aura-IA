@@ -23,6 +23,13 @@ const ACTION_LABEL: Record<string, string> = {
   user_removed: 'Removeu pessoa', templates_created: 'Criou modelos de mensagem', eval_started: 'Rodou avaliação de IA',
 };
 
+const COPILOT_MODELS = [
+  { value: 'anthropic|claude-haiku-5-5', label: 'Claude Haiku 5.5 (rápido e barato)' },
+  { value: 'anthropic|claude-sonnet-5-5', label: 'Claude Sonnet 5.5 (mais caprichado)' },
+  { value: 'openai|gpt-6-luna', label: 'GPT-6 Luna (rápido e barato)' },
+  { value: 'openai|gpt-6.1-terra', label: 'GPT-6.1 Terra (mais caprichado)' },
+];
+
 export default function SettingsPage() {
   const { can, me } = useAuth();
   const { toast } = useToast();
@@ -32,6 +39,7 @@ export default function SettingsPage() {
   const [rate, setRate] = useState('');
   const [lowPct, setLowPct] = useState('');
   const [emails, setEmails] = useState('');
+  const [copilot, setCopilot] = useState('anthropic|claude-haiku-5-5');
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState('operator');
   useEffect(() => {
@@ -39,12 +47,15 @@ export default function SettingsPage() {
     setRate(String(data.settings.credits_per_usd ?? 1000));
     setLowPct(String(data.settings.wallet_low_percent ?? 20));
     setEmails(((data.settings.alert_emails as string[]) || []).join(', '));
+    const cm = data.settings.copilot_model as { provider?: string; model?: string } | undefined;
+    if (cm?.provider && cm.model) setCopilot(`${cm.provider}|${cm.model}`);
   }, [data]);
   const fail = (e: unknown) => toast({ title: 'Não foi possível', description: (e as Error).message, variant: 'destructive' });
   const save = useMutation({
     mutationFn: () => consoleApi('settings_save', { settings: {
       credits_per_usd: Number(rate), wallet_low_percent: Number(lowPct),
       alert_emails: emails.split(/[,\s;]+/).map((s) => s.trim()).filter(Boolean),
+      copilot_model: { provider: copilot.split('|')[0], model: copilot.split('|')[1] },
     } }),
     onSuccess: () => { toast({ title: 'Parâmetros salvos' }); qc.invalidateQueries({ queryKey: ['settings'] }); },
     onError: fail,
@@ -73,6 +84,11 @@ export default function SettingsPage() {
             <div className="space-y-1.5"><Label>Alerta de crédito baixo (% do último pacote)</Label><Input disabled={!owner} inputMode="numeric" value={lowPct} onChange={(e) => setLowPct(e.target.value)} /></div>
             <div className="space-y-1.5"><Label>E-mails que recebem alertas</Label><Input disabled={!owner} value={emails} onChange={(e) => setEmails(e.target.value)} placeholder="voce@kynovia.com.br, …" />
               <p className="text-xs text-muted-foreground">O envio por e-mail entra na próxima etapa; os alertas já aparecem aqui no Console.</p></div>
+            <div className="space-y-1.5"><Label>Modelo do copiloto ("Sugerir resposta")</Label>
+              <select disabled={!owner} value={copilot} onChange={(e) => setCopilot(e.target.value)} className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+                {COPILOT_MODELS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+              <p className="text-xs text-muted-foreground">O provedor precisa estar ligado em Provedores de IA.</p></div>
             {owner && <div className="md:col-span-3"><BrandButton onClick={() => save.mutate()} disabled={save.isPending}>Salvar parâmetros</BrandButton></div>}
           </CardContent></Card>
         </TabsContent>

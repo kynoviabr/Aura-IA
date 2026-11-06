@@ -28,6 +28,7 @@ type Detail = {
   usage: UsageDay[];
   alerts: Alert[];
   breakdown: Record<string, { calls: number; cost_usd: number; credits: number; input: number; output: number }>;
+  suggestions?: { total: number; sent: number; sent_edited: number; errors: number };
 };
 type Pkg = { id: string; name: string; credits: number; price_brl: number; active: boolean };
 type Template = { name: string; language: string; category: string; status: string; body: string };
@@ -145,6 +146,15 @@ export default function WorkspaceDetailPage() {
         <CardHeader className="pb-2"><CardTitle className="text-base">Uso de IA · últimos 30 dias</CardTitle></CardHeader>
         <CardContent>
           <UsageChart data={data.usage} />
+          {!!data.suggestions?.total && (
+            <p className="mt-3 text-sm text-muted-foreground">
+              Copiloto: <b className="text-foreground">{num(data.suggestions.total)}</b> sugestões ·{' '}
+              <b className="text-foreground">{num(data.suggestions.sent)}</b> enviadas sem mudar ·{' '}
+              <b className="text-foreground">{num(data.suggestions.sent_edited)}</b> enviadas com ajuste ·{' '}
+              {num(Math.round(((data.suggestions.sent + data.suggestions.sent_edited) / data.suggestions.total) * 100))}% aproveitadas
+              {data.suggestions.errors > 0 && <> · {num(data.suggestions.errors)} com erro</>}
+            </p>
+          )}
           {Object.keys(data.breakdown).length > 0 && (
             <table className="mt-4 w-full text-sm">
               <thead className="text-left text-xs uppercase tracking-wide text-muted-foreground"><tr><th className="py-1">Uso · modelo</th><th className="py-1 text-right">Usos</th><th className="py-1 text-right">Tokens (entrada/saída)</th><th className="py-1 text-right">Custo</th><th className="py-1 text-right">Créditos</th></tr></thead>

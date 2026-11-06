@@ -1,4 +1,4 @@
-# API da Aura IA para os produtos (Fase 1)
+# API da Aura IA para os produtos
 
 Base: `https://<projeto>.supabase.co/functions/v1/api`
 Autenticação: `Authorization: Bearer aura_...` (chave do produto, entregue pela Kynovia).
@@ -14,7 +14,8 @@ Empresas são endereçadas pelo id delas no produto (`:ext`, ex.: `clinic_id` do
 | GET | `/v1/workspaces/:ext/conversations?limit&before&contact_ref` | Lista de conversas |
 | GET | `/v1/conversations/:id` | Conversa (com `window_open`) |
 | GET | `/v1/conversations/:id/messages` | Mensagens |
-| POST | `/v1/conversations/:id/messages` | Responder com texto (até 24h) `{ text, sentBy? }` → `{ message: { id, status, body } }` |
+| POST | `/v1/conversations/:id/messages` | Responder com texto (até 24h) `{ text, sentBy?, suggestionId? }` → `{ message: { id, status, body } }`. Mande `suggestionId` quando a mensagem veio do copiloto |
+| POST | `/v1/conversations/:id/suggest` | Copiloto: sugere a próxima mensagem (não envia) → `{ suggestion: { id, text, outcome, handoff, flags: [{ code, text }], sources: { catalog, businessInfo } } }` |
 | POST | `/v1/conversations/:id/read` | Marcar como lida |
 | GET | `/v1/workspaces/:ext/templates?status=all` | Modelos aprovados pela Meta (com `status=all`, também os em revisão e recusados) |
 | POST | `/v1/workspaces/:ext/templates/standard` | Cria os modelos padrão que faltam (também feito automaticamente ao conectar o número) |
@@ -48,3 +49,46 @@ Ao concluir a conexão do número (`channel/finish`), a Aura cria em português,
 | `aura_lembrete_horario` | Olá {{1}}, lembrete do seu horário na {{2}}: {{3}}. Responda SIM para confirmar ou nos chame para remarcar. |
 
 {{1}} = nome do cliente, {{2}} = nome da empresa, {{3}} = data/hora. A Meta revisa em até 24h; até lá eles aparecem com `status=all`.
+
+## Copiloto (Fase 2)
+
+`POST /v1/conversations/:id/suggest` lê as últimas 30 mensagens, pede ao produto o catálogo e os dados da empresa
+(API padrão abaixo) e devolve uma sugestão. Quem envia é sempre uma pessoa (com `suggestionId` no envio, para medir o uso).
+
+- `flags`: avisos para quem vai enviar (`health_topic`, `urgent`, `medical_advice`, `unsupported_number`, `action_claim`,
+  `injection`, `wants_human`, `hidden_data`). `text` traz a frase pronta para mostrar na tela.
+- `handoff: true`: o cliente pediu uma pessoa ou há possível urgência.
+- `outcome: blocked`: a sugestão foi descartada por segurança (`text` vazio).
+- `sources`: `ok`, `unsupported`, `error` ou `not_configured` para cada fonte de dados do produto.
+- Erros: `402 no_credits` (empresa sem créditos), `503 ai_disabled`, `502 ai_error`.
+- Custo: registrado por empresa (créditos) no Console. Modelo escolhido no Console (Configurações).
+
+## API padrão do produto (Aura → produto)
+
+O produto publica estes endereços na sua `api_base_url` (cadastrada no Console, em Aplicações). Cada pedido vem com:
+
+| Cabeçalho | Valor |
+|---|---|
+| `X-Aura-Workspace` | id da empresa no produto (`external_id`) |
+| `X-Aura-Timestamp` | segundos desde 1970 (recuse se tiver mais de 5 minutos de diferença) |
+| `X-Aura-Signature` | HMAC-SHA256 (hex), com o `webhook_secret`, de `<timestamp>.<MÉTODO>.<caminho com query>.<corpo>` |
+
+O caminho é o da URL pedida (ex.: `/functions/v1/aura-api/aura/catalog`). Responda 404 ou 501 para o que não oferece.
+
+`GET /aura/catalog`
+```json
+{ "services": [{ "id": "…", "name": "Limpeza de pele", "category": "Facial", "description": "…",
+    "durationMinutes": 70, "sessions": 1, "price": 180, "priceDisplay": "exact" }],
+  "packages": [{ "name": "Pacote verão", "price": 900, "items": ["Limpeza de pele", "Peeling"] }] }
+```
+`priceDisplay`: `exact` (pode dizer o preço), `from` ("a partir de", depende de avaliação) ou `hidden` (só após avaliação).
+
+`GET /aura/business-info`
+```json
+{ "name": "Clínica Bella", "address": "Av. Ana Costa, 1200 - Santos/SP", "phone": "(13) 99999-0000",
+  "hours": "seg a sex 9h às 19h; sáb 9h às 13h", "payment": "Pix, débito, crédito em até 10x",
+  "policies": "Remarcação com 24h de antecedência", "parking": "Conveniado no prédio",
+  "professionals": [{ "name": "Dra. Carla", "specialty": "Biomédica esteta" }],
+  "faq": [{ "question": "Atende sábado?", "answer": "Sim, das 9h às 13h." }], "notes": "…" }
+```
+Todos os campos são opcionais: a IA só usa o que vier e diz que vai confirmar com a equipe o que faltar.
