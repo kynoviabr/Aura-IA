@@ -98,3 +98,40 @@ describe('cliente Zernio', () => {
     expect(() => new ZernioClient('')).toThrow(HttpError);
   });
 });
+
+import { ensureStandardTemplates, STANDARD_TEMPLATES, templateComponents } from '../../supabase/functions/_shared/templates.ts';
+
+describe('modelos padrão', () => {
+  it('cria só os que faltam e não para no erro', async () => {
+    const created: string[] = [];
+    const z = {
+      templateNames: async () => ['aura_retomar_atendimento'],
+      createTemplate: async (_acc: string, t: { name: string }) => {
+        if (t.name === 'aura_lembrete_horario') throw new Error('nome em uso');
+        created.push(t.name);
+      },
+    };
+    const r = await ensureStandardTemplates(z, 'acc');
+    expect(r.existing).toEqual(['aura_retomar_atendimento']);
+    expect(r.created).toEqual(['aura_confirmacao_agendamento']);
+    expect(r.failed).toEqual([{ name: 'aura_lembrete_horario', error: 'nome em uso' }]);
+    expect(created).toEqual(['aura_confirmacao_agendamento']);
+  });
+  it('falha ao listar vira resumo, sem exceção', async () => {
+    const r = await ensureStandardTemplates({ templateNames: async () => { throw new Error('402'); }, createTemplate: async () => {} }, 'acc');
+    expect(r.failed[0]).toEqual({ name: '*', error: '402' });
+  });
+  it('exemplos batem com as variáveis e nomes seguem a regra da Meta', () => {
+    for (const t of STANDARD_TEMPLATES) {
+      expect(t.name).toMatch(/^[a-z][a-z0-9_]*$/);
+      expect(new Set(t.body.match(/\{\{\d+\}\}/g)).size).toBe(t.example.length);
+      expect(templateComponents(t)[0]).toMatchObject({ type: 'BODY', example: { body_text: [t.example] } });
+    }
+  });
+  it('cliente Zernio envia o modelo para criação', async () => {
+    let sent: Record<string, unknown> = {};
+    const fakeFetch = (async (_u: string, init: RequestInit) => { sent = JSON.parse(String(init.body)); return new Response('{"success":true}', { status: 200 }); }) as unknown as typeof fetch;
+    await new ZernioClient('k', fakeFetch).createTemplate('acc', { name: 'x', category: 'UTILITY', language: 'pt_BR', components: [] });
+    expect(sent).toMatchObject({ accountId: 'acc', name: 'x', category: 'UTILITY', language: 'pt_BR' });
+  });
+});

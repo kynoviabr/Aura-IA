@@ -16,7 +16,8 @@ Empresas são endereçadas pelo id delas no produto (`:ext`, ex.: `clinic_id` do
 | GET | `/v1/conversations/:id/messages` | Mensagens |
 | POST | `/v1/conversations/:id/messages` | Responder com texto (até 24h) `{ text, sentBy? }` → `{ message: { id, status, body } }` |
 | POST | `/v1/conversations/:id/read` | Marcar como lida |
-| GET | `/v1/workspaces/:ext/templates` | Modelos aprovados pela Meta |
+| GET | `/v1/workspaces/:ext/templates?status=all` | Modelos aprovados pela Meta (com `status=all`, também os em revisão e recusados) |
+| POST | `/v1/workspaces/:ext/templates/standard` | Cria os modelos padrão que faltam (também feito automaticamente ao conectar o número) |
 | POST | `/v1/workspaces/:ext/templates/send` | Enviar modelo `{ conversationId? \| phone, templateName, language, params, templateBody?, contact?{ name, externalType, externalRef }, sentBy? }` → `{ conversationId, contactId, message: { id, status, body } }` |
 | PATCH | `/v1/contacts/:id` | Dizer quem é o contato no produto `{ name?, externalType?, externalRef? }` |
 
@@ -35,3 +36,15 @@ Use `id` para não processar duas vezes.
 | `message.received` | `{ workspace, conversation_id, contact, message }` |
 | `message.sent` | idem (mensagens enviadas fora da Aura, ex.: celular) |
 | `message.status` | `{ workspace, conversation_id, message: { id, status } }` |
+
+## Modelos padrão
+
+Ao concluir a conexão do número (`channel/finish`), a Aura cria em português, categoria utilidade:
+
+| Modelo | Texto |
+|---|---|
+| `aura_retomar_atendimento` | Olá {{1}}, aqui é da {{2}}. Estamos retomando o seu atendimento. Pode responder esta mensagem para continuarmos? |
+| `aura_confirmacao_agendamento` | Olá {{1}}, seu horário na {{2}} está agendado para {{3}}. Se precisar remarcar, é só responder esta mensagem. |
+| `aura_lembrete_horario` | Olá {{1}}, lembrete do seu horário na {{2}}: {{3}}. Responda SIM para confirmar ou nos chame para remarcar. |
+
+{{1}} = nome do cliente, {{2}} = nome da empresa, {{3}} = data/hora. A Meta revisa em até 24h; até lá eles aparecem com `status=all`.
