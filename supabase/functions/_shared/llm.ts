@@ -1,0 +1,97 @@
+/**
+ * Adaptador único para os provedores de IA (Claude e OpenAI).
+ * O resto da Aura chama generate() e recebe sempre o mesmo formato, com tokens e tempo para cobrar e medir.
+ * Os clientes (SDK oficial de cada provedor) são passados de fora: assim dá para testar com dublês.
+ */
+
+export type ChatMessage = { role: 'user' | 'assistant'; content: string };
+
+export type GenerateInput = {
+  provider: 'anthropic' | 'openai';
+  model: string;
+  system: string;
+  messages: ChatMessage[];
+  maxTokens?: number;
+  /** Esforço de raciocínio: baixo para respostas curtas de atendimento. */
+  effort?: 'low' | 'medium' | 'high';
+};
+
+export type GenerateResult = {
+  text: string;
+  outcome: 'ok' | 'error' | 'refused';
+  error?: string;
+  /** Total de tokens de entrada, incluindo os lidos do cache. */
+  inputTokens: number;
+  cachedTokens: number;
+  outputTokens: number;
+  latencyMs: number;
+};
+
+// Formas mínimas dos SDKs que usamos (o resto do SDK não importa aqui).
+export type AnthropicLike = {
+  messages: { create: (params: Record<string, unknown>) => Promise<{
+    content: Array<{ type: string; text?: string }>;
+    stop_reason: string | null;
+    usage: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
+  }> };
+};
+export type OpenAILike = {
+  responses: { create: (params: Record<string, unknown>) => Promise<{
+    output_text?: string;
+    status?: string;
+    usage?: { input_tokens: number; output_tokens: number; input_tokens_details?: { cached_tokens?: number } };
+  }> };
+};
+
+export type Clients = { anthropic?: AnthropicLike; openai?: OpenAILike };
+
+function errorText(e: unknown): string {
+  const err = e as { status?: number; message?: string; error?: { message?: string } };
+  const msg = err?.error?.message || err?.message || String(e);
+  return err?.status ? `HTTP ${err.status}: ${msg}` : msg;
+}
+
+export async function generate(clients: Clients, input: GenerateInput, now: () => number = Date.now): Promise<GenerateResult> {
+  const start = now();
+  const base = { inputTokens: 0, cachedTokens: 0, outputTokens: 0 };
+  try {
+    if (input.provider === 'anthropic') {
+      if (!clients.anthropic) throw new Error('Chave do Claude não cadastrada.');
+      const res = await clients.anthropic.messages.create({
+        model: input.model,
+        max_tokens: input.maxTokens ?? 2048,
+        // Instruções fixas com cache: o custo da parte repetida cai em pedidos seguidos.
+        system: [{ type: 'text', text: input.system, cache_control: { type: 'ephemeral' } }],
+        messages: input.messages,
+        ...(input.effort ? { output_config: { effort: input.effort } } : {}),
+      });
+      const u = res.usage;
+      const cached = Number(u.cache_read_input_tokens || 0);
+      const created = Number(u.cache_creation_input_tokens || 0);
+      const usage = { inputTokens: u.input_tokens + cached + created, cachedTokens: cached, outputTokens: u.output_tokens, latencyMs: now() - start };
+      // Recusa do filtro de segurança: vem com HTTP 200 e stop_reason "refusal".
+      if (res.stop_reason === 'refusal') return { text: '', outcome: 'refused', error: 'O modelo recusou responder.', ...usage };
+      const text = res.content.filter((b) => b.type === 'text').map((b) => b.text || '').join('').trim();
+      return { text, outcome: 'ok', ...usage };
+    }
+    if (!clients.openai) throw new Error('Chave da OpenAI não cadastrada.');
+    const res = await clients.openai.responses.create({
+      model: input.model,
+      instructions: input.system,
+      input: input.messages.map((m) => ({ role: m.role, content: m.content })),
+      max_output_tokens: input.maxTokens ?? 2048,
+      ...(input.effort ? { reasoning: { effort: input.effort } } : {}),
+    });
+    const u = res.usage || { input_tokens: 0, output_tokens: 0 };
+    return {
+      text: String(res.output_text || '').trim(),
+      outcome: 'ok',
+      inputTokens: u.input_tokens,
+      cachedTokens: Number(u.input_tokens_details?.cached_tokens || 0),
+      outputTokens: u.output_tokens,
+      latencyMs: now() - start,
+    };
+  } catch (e) {
+    return { text: '', outcome: 'error', error: errorText(e).slice(0, 500), ...base, latencyMs: now() - start };
+  }
+}
