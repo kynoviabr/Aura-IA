@@ -6,6 +6,7 @@ import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.4
 import { corsHeaders, errorResponse, HttpError, json, match, routeParts } from '../_shared/http.ts';
 import { isWindowOpen, phoneKey, renderTemplate, waNumber } from '../_shared/phone.ts';
 import { ZernioClient } from '../_shared/zernio.ts';
+import { ensureStandardTemplates } from '../_shared/templates.ts';
 
 type App = { id: string; slug: string; name: string };
 type Workspace = { id: string; app_id: string; external_id: string; name: string; timezone: string };
@@ -115,7 +116,10 @@ async function route(req: Request, db: SupabaseClient): Promise<Response> {
       status: 'connected', connected_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     }).eq('workspace_id', ws.id);
     if (error) throw new HttpError(409, 'account_in_use', 'Este número já está ligado a outra empresa.');
-    return json({ ok: true });
+    // Pacote de modelos padrão (vai para aprovação da Meta). Falha aqui não impede a conexão.
+    const templates = await ensureStandardTemplates(zernio(), String(acc._id));
+    if (templates.failed.length) console.warn('modelos padrão', ws.id, templates.failed);
+    return json({ ok: true, templates });
   }
 
   // ---------- Conversas ----------
@@ -175,7 +179,15 @@ async function route(req: Request, db: SupabaseClient): Promise<Response> {
   if (m === 'GET' && (p = match('v1/workspaces/:ext/templates', parts))) {
     const ws = await workspaceOf(db, app, p.ext);
     const ch = await connectedChannel(db, ws.id);
-    return json({ templates: await zernio().templates(ch.provider_account_id) });
+    const all = new URL(req.url).searchParams.get('status') === 'all';
+    return json({ templates: await zernio().templates(ch.provider_account_id, !all) });
+  }
+
+  // Cria (de novo) os modelos padrão que faltam no número. Útil se a criação falhou na conexão.
+  if (m === 'POST' && (p = match('v1/workspaces/:ext/templates/standard', parts))) {
+    const ws = await workspaceOf(db, app, p.ext);
+    const ch = await connectedChannel(db, ws.id);
+    return json({ templates: await ensureStandardTemplates(zernio(), ch.provider_account_id) });
   }
 
   if (m === 'POST' && (p = match('v1/workspaces/:ext/templates/send', parts))) {

@@ -3,7 +3,7 @@ import { HttpError } from './http.ts';
 
 const BASE = 'https://zernio.com/api/v1';
 
-export type ZernioTemplate = { name: string; language: string; category: string; body: string; variables: number };
+export type ZernioTemplate = { name: string; language: string; category: string; status: string; body: string; variables: number };
 
 export class ZernioClient {
   constructor(private readonly apiKey: string, private readonly fetchImpl: typeof fetch = fetch) {
@@ -47,13 +47,26 @@ export class ZernioClient {
     return (r.accounts as Array<Record<string, unknown>>) || [];
   }
 
-  async templates(accountId: string): Promise<ZernioTemplate[]> {
-    const r = await this.call(`/whatsapp/templates?accountId=${accountId}&status=APPROVED`);
+  /** Modelos do número. Por padrão só os aprovados (os que podem ser enviados). */
+  async templates(accountId: string, onlyApproved = true): Promise<ZernioTemplate[]> {
+    const r = await this.call(`/whatsapp/templates?accountId=${accountId}${onlyApproved ? '&status=APPROVED' : ''}`);
     return ((r.templates as Array<Record<string, unknown>>) || []).map((t) => {
       const comps = (t.components as Array<Record<string, unknown>>) || [];
       const body = String(comps.find((c) => c.type === 'BODY')?.text || '');
-      return { name: String(t.name), language: String(t.language), category: String(t.category), body, variables: new Set(body.match(/\{\{\d+\}\}/g) || []).size };
+      return {
+        name: String(t.name), language: String(t.language), category: String(t.category), status: String(t.status || ''),
+        body, variables: new Set(body.match(/\{\{\d+\}\}/g) || []).size,
+      };
     });
+  }
+
+  /** Nomes de todos os modelos do número, em qualquer situação (aprovado, em revisão, recusado). */
+  async templateNames(accountId: string): Promise<string[]> {
+    return (await this.templates(accountId, false)).map((t) => t.name);
+  }
+
+  async createTemplate(accountId: string, t: { name: string; category: string; language: string; components: unknown[] }): Promise<void> {
+    await this.call('/whatsapp/templates', { method: 'POST', body: JSON.stringify({ accountId, ...t }) });
   }
 
   async sendText(conversationId: string, accountId: string, text: string): Promise<string | null> {
