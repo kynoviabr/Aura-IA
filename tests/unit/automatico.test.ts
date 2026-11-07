@@ -31,34 +31,49 @@ describe('datas e horários', () => {
 });
 
 describe('ferramentas da agenda', () => {
-  it('consulta horários e mostra rótulo, início e profissional', async () => {
-    const product = fakeProduct();
+  it('consulta horários e devolve o dia inteiro agrupado, com data e profissional', async () => {
+    const product = fakeProduct({ availability: async (q: unknown) => {
+      (product as unknown as { calls: Array<[string, unknown]> }).calls.push(['availability', q]);
+      return { status: 'ok', data: { durationMinutes: 60, slots: ['09:00', '09:30', '13:00', '17:00'].map((t) => (
+        { start: `2026-11-12T${t}:00-03:00`, end: '', professionalId: 'pro-1', professionalName: 'Dra. Carla' })) } };
+    } });
     const exec = toolExecutor(product, contact, 'conv-1', {}, () => new Date('2026-11-06T15:00:00Z'));
-    const out = await exec('verificar_horarios', { servico_id: 'svc-1', data_inicio: '2026-11-01', data_fim: '2026-11-10' });
-    expect(out).toContain('rótulo: segunda-feira, 09/11 às 14:00 com Dra. Carla');
-    expect(out).toContain('inicio: 2026-11-09T14:00:00-03:00 | profissional_id: pro-1');
-    // Data no passado vira hoje.
-    expect((product as unknown as { calls: Array<[string, { from: string }]> }).calls[0][1].from).toBe('2026-11-06');
+    const out = await exec('verificar_horarios', { servico_id: 'svc-1', data_inicio: '2026-11-01', data_fim: '2026-11-12', periodo: 'tarde' });
+    expect(out).toContain('quinta-feira, 12/11 (data: 2026-11-12) com Dra. Carla (profissional_id: pro-1): 09:00, 09:30, 13:00, 17:00');
+    expect(out).toContain('atendimento de 60 min');
+    const q = (product as unknown as { calls: Array<[string, { from: string; period?: string }]> }).calls[0][1];
+    expect(q.from).toBe('2026-11-06'); // data no passado vira hoje
+    expect(q.period).toBe('afternoon');
+  });
+
+  it('horário exato não livre: avisa que vale só para a consulta', async () => {
+    const product = fakeProduct({ availability: async () => ({ status: 'ok', data: { slots: [] } }) });
+    const out = await toolExecutor(product, contact, 'c', {})('verificar_horarios', { servico_id: 's', data_inicio: '2026-11-12', data_fim: '2026-11-12', horario: '17:00' });
+    expect(out).toContain('Nenhum horário livre às 17:00 quinta-feira, 12/11');
+    expect(out).toContain('vale só para esta consulta');
+    expect(await toolExecutor(product, contact, 'c', {})('verificar_horarios', { servico_id: 's', data_inicio: '2026-11-12', data_fim: '2026-11-12', horario: '17h' })).toContain('HH:MM');
   });
 
   it('agenda com chave de repetição e guarda o resultado', async () => {
     const product = fakeProduct();
     const state: TurnState = {};
     const exec = toolExecutor(product, contact, 'conv-1', state);
-    const out = await exec('agendar', { servico_id: 'svc-1', inicio: '2026-11-09T14:00:00-03:00', profissional_id: 'pro-1', nome_cliente: 'Sebastião Silva' });
+    const out = await exec('agendar', { servico_id: 'svc-1', data: '2026-11-09', hora: '14:00', profissional_id: 'pro-1', nome_cliente: 'Sebastião Silva' });
     expect(out).toContain('Agendado com sucesso');
     expect(state.booked?.id).toBe('bk-1');
     const sent = (product as unknown as { calls: Array<[string, Record<string, unknown>]> }).calls[0][1];
     expect(sent.idempotencyKey).toBe('conv-1:svc-1:2026-11-09T14:00:00-03:00');
     expect(sent.contact).toMatchObject({ ref: 'lead-1', name: 'Sebastião Silva' });
     // Segunda chamada na mesma conversa não marca de novo.
-    expect(await exec('agendar', { servico_id: 'svc-1', inicio: 'x', profissional_id: 'pro-1', nome_cliente: 'S' })).toContain('Já foi agendado');
+    expect(await exec('agendar', { servico_id: 'svc-1', data: '2026-11-09', hora: '15:00', profissional_id: 'pro-1', nome_cliente: 'S' })).toContain('Já foi agendado');
+    expect(sent.start).toBe('2026-11-09T14:00:00-03:00');
   });
 
   it('horário ocupado pede nova consulta; datas inválidas são recusadas', async () => {
     const product = fakeProduct({ createBooking: async () => ({ status: 'error', error: '409', code: 'slot_unavailable' }) });
     const exec = toolExecutor(product, contact, 'conv-1', {});
-    expect(await exec('agendar', { servico_id: 's', inicio: 'i', profissional_id: 'p', nome_cliente: 'n' })).toContain('não está mais livre');
+    expect(await exec('agendar', { servico_id: 's', data: '2026-11-09', hora: '14:00', profissional_id: 'p', nome_cliente: 'n' })).toContain('não está mais livre');
+    expect(await exec('agendar', { servico_id: 's', inicio: '2026-11-09T14:00', profissional_id: 'p', nome_cliente: 'n' })).toContain('informe data');
     expect(await exec('verificar_horarios', { servico_id: 's', data_inicio: 'amanhã', data_fim: 'x' })).toContain('AAAA-MM-DD');
   });
 
