@@ -79,20 +79,34 @@ O caminho é o da URL pedida (ex.: `/functions/v1/aura-api/aura/catalog`). Respo
 
 `GET /aura/catalog`
 ```json
-{ "services": [{ "id": "…", "name": "Limpeza de pele", "category": "Facial", "description": "…",
-    "durationMinutes": 70, "sessions": 1, "price": 180, "priceDisplay": "exact" }],
+{ "services": [
+    { "id": "evaluation", "kind": "evaluation", "name": "Avaliação", "durationMinutes": 30, "price": 0, "priceDisplay": "exact" },
+    { "id": "…", "kind": "treatment", "name": "Limpeza de pele", "category": "Facial", "durationMinutes": 70, "sessions": 1,
+      "price": 180, "priceDisplay": "exact", "requiresEvaluation": false, "aiBookable": true, "professionals": ["Dra. Rafaela"] }],
   "packages": [{ "name": "Pacote verão", "price": 900, "items": ["Limpeza de pele", "Peeling"] }] }
 ```
-`priceDisplay`: `exact` (pode dizer o preço), `from` ("a partir de", depende de avaliação) ou `hidden` (só após avaliação).
+- `priceDisplay`: `exact` (pode dizer o preço), `from` ("a partir de") ou `hidden` (só após avaliação).
+- `requiresEvaluation`: a IA agenda a avaliação (`serviceId: "evaluation"`) com `interestServiceId` = este serviço.
+- `aiBookable: false`: a IA não agenda; passa para a equipe.
+- `professionals`: só nomes que o profissional aceita mostrar.
 
-`GET /aura/business-info`
+`GET /aura/business-info` (formato organizado; `hours`, `payment` e `parking` também aceitam texto livre)
 ```json
-{ "name": "Clínica Bella", "address": "Av. Ana Costa, 1200 - Santos/SP", "phone": "(13) 99999-0000",
-  "hours": "seg a sex 9h às 19h; sáb 9h às 13h", "payment": "Pix, débito, crédito em até 10x",
-  "policies": "Remarcação com 24h de antecedência", "parking": "Conveniado no prédio",
-  "professionals": [{ "name": "Dra. Carla", "specialty": "Biomédica esteta" }],
-  "faq": [{ "question": "Atende sábado?", "answer": "Sim, das 9h às 13h." }], "notes": "…" }
+{ "name": "Clínica Aura", "address": "…", "phone": "…",
+  "hours": [{ "day": 1, "opens": "09:00", "closes": "19:00" }],
+  "closures": [{ "date": "2026-12-25", "reason": "Natal" }],
+  "payment": { "methods": ["pix", "debito", "credito"], "maxInstallments": 10, "installmentsMinValue": 1000, "notes": "sem juros" },
+  "parking": { "type": "partner", "notes": "no prédio" },
+  "insurance": { "accepts": false, "plans": [], "notes": null },
+  "evaluation": { "offered": true, "free": true, "durationMinutes": 30, "price": null },
+  "scheduling": { "minNoticeMinutes": 60, "horizonDays": 30, "rescheduleNoticeHours": 24 },
+  "policies": "…", "notes": "…", "faq": [{ "question": "…", "answer": "…" }],
+  "professionals": [{ "name": "Dra. Rafaela", "specialty": "Biomédica", "services": ["Limpeza de pele"] }],
+  "setupIssues": [{ "code": "treatment_without_professional", "text": "Laser não tem profissional que atende." }] }
 ```
+`hours[].day`: 0 = domingo … 6 = sábado. `parking.type`: none, free, paid, partner, unknown.
+`payment.methods`: pix, debito, credito, dinheiro, boleto, transferencia.
+
 Todos os campos são opcionais: a IA só usa o que vier e diz que vai confirmar com a equipe o que faltar.
 
 ## Atendimento automático (Fases 3 e 4)
@@ -115,8 +129,8 @@ Horários com fuso explícito (ex.: `2026-11-10T14:00:00-03:00`).
 
 | Método | Rota | Corpo / resposta |
 |---|---|---|
-| GET | `/aura/availability?serviceId&from&to&professionalId?&period?&time?` | `from`/`to` = AAAA-MM-DD (até 14 dias); `period` = morning/afternoon/evening; `time` = HH:MM. Devolve **todos** os horários livres (até 120) → `{ timezone, durationMinutes, slots: [{ start, end, professionalId, professionalName }], truncated }` |
-| POST | `/aura/bookings` | `{ serviceId, start, professionalId, contact, idempotencyKey }` → `201 { booking }`; horário ocupado → `409 { error: "slot_unavailable" }` |
+| GET | `/aura/availability?serviceId&from&to&professionalId?&period?&time?` | `from`/`to` = AAAA-MM-DD (até 14 dias); `period` = morning/afternoon/evening; `time` = HH:MM. Horário livre = horário da empresa ∩ agenda do profissional que faz o serviço − agendamentos (com intervalo) − bloqueios − dias fechados. Devolve **todos** (até 120); sem profissional → `reason: "no_professional"`; erros `requires_evaluation`, `not_bookable` → `{ timezone, durationMinutes, slots: [{ start, end, professionalId, professionalName }], truncated }` |
+| POST | `/aura/bookings` | `{ serviceId, interestServiceId?, start, professionalId, contact, idempotencyKey }` → `201 { booking }`; horário ocupado → `409 { error: "slot_unavailable" }` |
 | POST | `/aura/bookings/search` | `{ contact }` → `{ bookings: [...] }` (próximos horários) |
 | POST | `/aura/bookings/:id/cancel` | `{ contact, reason }` → `{ booking }` |
 
