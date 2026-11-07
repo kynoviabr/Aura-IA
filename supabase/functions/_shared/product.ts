@@ -89,9 +89,13 @@ export class ProductClient {
   catalog() { return this.call<Catalog>('GET', '/aura/catalog'); }
   businessInfo() { return this.call<BusinessInfo>('GET', '/aura/business-info'); }
 
-  availability(q: { serviceId: string; from: string; to: string; professionalId?: string }) {
-    const p = new URLSearchParams({ serviceId: q.serviceId, from: q.from, to: q.to, ...(q.professionalId ? { professionalId: q.professionalId } : {}) });
-    return this.call<{ timezone?: string; slots: Slot[] }>('GET', `/aura/availability?${p}`);
+  /** period: morning | afternoon | evening; time: HH:MM (só aquele horário). */
+  availability(q: { serviceId: string; from: string; to: string; professionalId?: string; period?: string; time?: string }) {
+    const p = new URLSearchParams({ serviceId: q.serviceId, from: q.from, to: q.to });
+    if (q.professionalId) p.set('professionalId', q.professionalId);
+    if (q.period) p.set('period', q.period);
+    if (q.time) p.set('time', q.time);
+    return this.call<{ timezone?: string; durationMinutes?: number; slots: Slot[]; truncated?: boolean }>('GET', `/aura/availability?${p}`);
   }
 
   createBooking(b: { serviceId: string; start: string; professionalId: string; contact: ProductContact; idempotencyKey: string }) {

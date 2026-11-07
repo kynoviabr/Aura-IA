@@ -27,11 +27,15 @@ Regras gerais:
 
 Agendamento (você tem acesso à agenda):
 1. Descubra o serviço (use o servico_id da lista) e o dia ou período de preferência do cliente.
-2. Use verificar_horarios e ofereça no máximo 3 opções, com dia da semana, data e hora (use o "rótulo" que a ferramenta devolve).
+2. Use verificar_horarios e ofereça no máximo 3 opções, com dia da semana, data e hora.
+   - Cliente pediu um horário exato ("quinta às 17h"): consulte com "horario" naquele dia. Pediu um período ("de tarde"): use "periodo".
+   - NUNCA diga que um horário está livre ou ocupado sem ter consultado verificar_horarios NESTA resposta. O que foi dito antes na conversa pode estar desatualizado.
+   - A ferramenta devolve TODOS os horários livres do período consultado. Só diga que um dia ou período está cheio se a consulta daquele dia/período voltar vazia.
 3. Quando o cliente escolher, confirme tudo numa frase (serviço, dia, hora e profissional) e pergunte se pode marcar.
 4. Só chame agendar depois de um "sim" claro do cliente para aquele horário exato. Você precisa do nome do cliente: se não souber, pergunte antes.
 5. Depois que agendar der certo, confirme com os detalhes e lembre a regra de remarcação, se a empresa tiver uma.
 6. Nunca diga que marcou, remarcou ou cancelou sem a ferramenta ter confirmado. Se a ferramenta falhar, peça desculpas e ofereça outro horário.
+7. Se você errou antes, corrija com naturalidade, sem dar detalhes técnicos.
 - Remarcar: veja meus_agendamentos, ofereça novos horários, confirme com o cliente, agende o novo e depois cancele o antigo.
 - Cancelar: confirme qual horário é e pergunte se pode cancelar; só então chame cancelar_agendamento.
 
@@ -54,6 +58,8 @@ export const AUTO_TOOLS: ToolSpec[] = [
         servico_id: { type: 'string', description: 'servico_id da lista de serviços' },
         data_inicio: DATE,
         data_fim: DATE,
+        periodo: { type: 'string', enum: ['manha', 'tarde', 'noite'], description: 'Opcional: manhã (antes das 12h), tarde (12h às 18h) ou noite' },
+        horario: { type: 'string', description: 'Opcional: só este horário, no formato HH:MM (ex.: 17:00)' },
         profissional_id: { type: 'string', description: 'Opcional: só horários deste profissional' },
       },
       required: ['servico_id', 'data_inicio', 'data_fim'],
@@ -66,11 +72,12 @@ export const AUTO_TOOLS: ToolSpec[] = [
       type: 'object',
       properties: {
         servico_id: { type: 'string' },
-        inicio: { type: 'string', description: 'Campo "inicio" exatamente como veio de verificar_horarios' },
-        profissional_id: { type: 'string', description: 'Campo "profissional_id" de verificar_horarios' },
+        data: DATE,
+        hora: { type: 'string', description: 'Hora no formato HH:MM, como veio de verificar_horarios' },
+        profissional_id: { type: 'string', description: 'profissional_id que veio de verificar_horarios' },
         nome_cliente: { type: 'string', description: 'Nome do cliente' },
       },
-      required: ['servico_id', 'inicio', 'profissional_id', 'nome_cliente'],
+      required: ['servico_id', 'data', 'hora', 'profissional_id', 'nome_cliente'],
     },
   },
   {
@@ -115,6 +122,29 @@ function bookingLine(b: Booking): string {
 
 const isDate = (v: unknown) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
 
+/** Fuso de Brasília (sem horário de verão desde 2019). */
+export const OFFSET = '-03:00';
+const PERIODS: Record<string, string | undefined> = { manha: 'morning', tarde: 'afternoon', noite: 'evening' };
+
+/** "terça-feira, 10/11" a partir de AAAA-MM-DD. */
+export function dayLabel(date: string): string {
+  return new Intl.DateTimeFormat('pt-BR', { timeZone: TIMEZONE, weekday: 'long', day: '2-digit', month: '2-digit' }).format(new Date(`${date}T12:00:00${OFFSET}`));
+}
+
+/** Lista compacta por dia e profissional: todos os horários, sem cortar (a IA precisa ver o dia inteiro). */
+export function groupSlots(slots: Slot[], title: string, duration?: number, truncated = false): string {
+  const groups = new Map<string, { day: string; pro: string; proId: string; date: string; times: string[] }>();
+  for (const x of slots) {
+    const date = x.start.slice(0, 10);
+    const key = `${date}|${x.professionalId}`;
+    if (!groups.has(key)) groups.set(key, { day: dayLabel(date), pro: x.professionalName || 'profissional', proId: x.professionalId, date, times: [] });
+    groups.get(key)!.times.push(x.start.slice(11, 16));
+  }
+  const lines = [...groups.values()].map((g) => `- ${g.day} (data: ${g.date}) com ${g.pro} (profissional_id: ${g.proId}): ${g.times.join(', ')}`);
+  return `${title}${duration ? ` (atendimento de ${duration} min)` : ''}:\n${lines.join('\n')}`
+    + (truncated ? '\n(Lista cortada: há mais horários. Consulte um período menor para ver o resto.)' : '');
+}
+
 /** Executa as ferramentas falando com o produto. Nunca lança erro: devolve um texto que a IA entende. */
 export function toolExecutor(
   product: ProductClient,
@@ -131,22 +161,29 @@ export function toolExecutor(
         if (!isDate(input.data_inicio) || !isDate(input.data_fim)) return 'Erro: use datas no formato AAAA-MM-DD.';
         const today = localDate(now());
         const from = s('data_inicio') < today ? today : s('data_inicio');
-        const r = await product.availability({ serviceId: s('servico_id'), from, to: s('data_fim'), professionalId: s('profissional_id') || undefined });
+        const horario = s('horario');
+        if (horario && !/^\d{2}:\d{2}$/.test(horario)) return 'Erro: use o horário no formato HH:MM.';
+        const period = PERIODS[s('periodo')];
+        const r = await product.availability({
+          serviceId: s('servico_id'), from, to: s('data_fim'), professionalId: s('profissional_id') || undefined, period, time: horario || undefined,
+        });
         if (r.status !== 'ok') return `Não consegui consultar a agenda agora (${r.status === 'unsupported' ? 'a empresa não liberou a agenda' : 'erro'}). Passe para a equipe.`;
-        const slots: Slot[] = (r.data.slots || []).slice(0, 15);
-        if (!slots.length) return `Sem horários livres de ${from} a ${s('data_fim')}. Ofereça outro período.`;
-        return 'Horários livres:\n' + slots.map((x) =>
-          `- rótulo: ${slotLabel(x.start)}${x.professionalName ? ` com ${x.professionalName}` : ''} | inicio: ${x.start} | profissional_id: ${x.professionalId}`,
-        ).join('\n');
+        const what = [horario ? `às ${horario}` : '', s('periodo') ? `de ${s('periodo').replace('manha', 'manhã')}` : ''].filter(Boolean).join(' ');
+        const range = from === s('data_fim') ? dayLabel(from) : `de ${dayLabel(from)} a ${dayLabel(s('data_fim'))}`;
+        const slots: Slot[] = r.data.slots || [];
+        if (!slots.length) return `Nenhum horário livre ${what} ${range}. Isso vale só para esta consulta: ofereça outros horários (consulte de novo sem o filtro ou outro dia).`.replace(/\s+/g, ' ');
+        return groupSlots(slots, `Horários livres ${what} ${range}`.replace(/\s+/g, ' '), r.data.durationMinutes, !!r.data.truncated);
       }
 
       if (name === 'agendar') {
         if (state.booked) return `Já foi agendado nesta conversa: ${bookingLine(state.booked)}.`;
         const nome = s('nome_cliente');
+        if (!isDate(input.data) || !/^\d{2}:\d{2}$/.test(s('hora'))) return 'Erro: informe data (AAAA-MM-DD) e hora (HH:MM).';
+        const start = `${s('data')}T${s('hora')}:00${OFFSET}`;
         const r = await product.createBooking({
-          serviceId: s('servico_id'), start: s('inicio'), professionalId: s('profissional_id'),
+          serviceId: s('servico_id'), start, professionalId: s('profissional_id'),
           contact: { ...contact, name: nome || contact.name },
-          idempotencyKey: `${conversationId}:${s('servico_id')}:${s('inicio')}`,
+          idempotencyKey: `${conversationId}:${s('servico_id')}:${start}`,
         });
         if (r.status === 'ok') {
           state.booked = r.data.booking;

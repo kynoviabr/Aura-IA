@@ -115,7 +115,7 @@ Horários com fuso explícito (ex.: `2026-11-10T14:00:00-03:00`).
 
 | Método | Rota | Corpo / resposta |
 |---|---|---|
-| GET | `/aura/availability?serviceId&from&to&professionalId?` | `from`/`to` = AAAA-MM-DD (até 14 dias) → `{ timezone, slots: [{ start, end, professionalId, professionalName }] }` |
+| GET | `/aura/availability?serviceId&from&to&professionalId?&period?&time?` | `from`/`to` = AAAA-MM-DD (até 14 dias); `period` = morning/afternoon/evening; `time` = HH:MM. Devolve **todos** os horários livres (até 120) → `{ timezone, durationMinutes, slots: [{ start, end, professionalId, professionalName }], truncated }` |
 | POST | `/aura/bookings` | `{ serviceId, start, professionalId, contact, idempotencyKey }` → `201 { booking }`; horário ocupado → `409 { error: "slot_unavailable" }` |
 | POST | `/aura/bookings/search` | `{ contact }` → `{ bookings: [...] }` (próximos horários) |
 | POST | `/aura/bookings/:id/cancel` | `{ contact, reason }` → `{ booking }` |
