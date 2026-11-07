@@ -20,20 +20,77 @@ function priceText(s: CatalogService): string {
   return brl(p);
 }
 
+const DAYS = ['domingo', 'segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado'];
+const PAYMENT_LABEL: Record<string, string> = {
+  pix: 'Pix', debito: 'cartão de débito', credito: 'cartão de crédito', dinheiro: 'dinheiro', boleto: 'boleto', transferencia: 'transferência',
+};
+const PARKING_LABEL: Record<string, string> = { none: 'não tem estacionamento', free: 'estacionamento gratuito', paid: 'estacionamento pago', partner: 'estacionamento conveniado' };
+
+/** "segunda a sexta: 09:00–19:00; sábado: 09:00–13:00; domingo: fechado" a partir do horário organizado. */
+export function hoursText(hours: { day: number; opens: string; closes: string }[]): string {
+  const byDay = DAYS.map((_, d) => hours.filter((h) => h.day === d).sort((x, y) => x.opens.localeCompare(y.opens))
+    .map((h) => `${h.opens}–${h.closes}`).join(' e ') || 'fechado');
+  // Agrupa dias seguidos com o mesmo horário (segunda a sábado; domingo por último).
+  const order = [1, 2, 3, 4, 5, 6, 0];
+  const parts: string[] = [];
+  for (let i = 0; i < order.length;) {
+    let j = i;
+    while (j + 1 < order.length && byDay[order[j + 1]] === byDay[order[i]]) j++;
+    const label = i === j ? DAYS[order[i]] : `${DAYS[order[i]]} a ${DAYS[order[j]]}`;
+    parts.push(`${label}: ${byDay[order[i]]}`);
+    i = j + 1;
+  }
+  return parts.join('; ');
+}
+
+function paymentText(p: NonNullable<BusinessInfo['payment']>): string {
+  if (typeof p === 'string') return p;
+  const methods = (p.methods || []).map((m) => PAYMENT_LABEL[m] || m);
+  const parts = [methods.length ? methods.join(', ') : ''];
+  if (p.maxInstallments && (p.methods || []).includes('credito')) {
+    parts.push(`crédito em até ${p.maxInstallments}x${p.installmentsMinValue ? ` (para valores a partir de ${brl(p.installmentsMinValue)})` : ''}`);
+  }
+  if (p.notes) parts.push(p.notes);
+  return parts.filter(Boolean).join('; ');
+}
+
 /** Dados da empresa em texto, para a IA. Só entra o que o produto respondeu. */
 export function businessContext(catalog: Catalog | null, info: BusinessInfo | null, opts: { withIds?: boolean } = {}): string {
   const lines: string[] = [];
   if (info) {
     if (info.name) lines.push(`Empresa: ${info.name}`);
     if (info.address) lines.push(`Endereço: ${info.address}`);
-    if (info.parking) lines.push(`Estacionamento: ${info.parking}`);
-    if (info.hours) lines.push(`Horário de funcionamento: ${info.hours}`);
     if (info.phone) lines.push(`Telefone: ${info.phone}`);
-    if (info.payment) lines.push(`Formas de pagamento: ${info.payment}`);
+    if (typeof info.hours === 'string' && info.hours) lines.push(`Horário de funcionamento: ${info.hours}`);
+    if (Array.isArray(info.hours) && info.hours.length) lines.push(`Horário de funcionamento da empresa: ${hoursText(info.hours)}`);
+    if (info.closures?.length) {
+      lines.push(`Dias fechados: ${info.closures.map((c) => `${c.date.slice(8, 10)}/${c.date.slice(5, 7)}${c.reason ? ` (${c.reason})` : ''}`).join(', ')}`);
+    }
+    if (info.parking) {
+      const pk = typeof info.parking === 'string' ? info.parking
+        : [PARKING_LABEL[info.parking.type || ''] || '', info.parking.notes || ''].filter(Boolean).join(' — ');
+      if (pk) lines.push(`Estacionamento: ${pk}`);
+    }
+    if (info.payment) {
+      const pay = paymentText(info.payment);
+      if (pay) lines.push(`Formas de pagamento: ${pay}`);
+    }
+    if (info.insurance) {
+      const ins = info.insurance;
+      lines.push(`Planos/convênios: ${ins.accepts ? `aceita${ins.plans?.length ? ` ${ins.plans.join(', ')}` : ''}` : 'não aceita (atendimento particular)'}${ins.notes ? ` — ${ins.notes}` : ''}`);
+    }
+    if (info.evaluation) {
+      const ev = info.evaluation;
+      lines.push(ev.offered === false ? 'Avaliação: a empresa não faz avaliação.'
+        : `Avaliação: ${ev.free ? 'gratuita' : ev.price ? brl(ev.price) : 'valor informado pela equipe'}${ev.durationMinutes ? `, ${ev.durationMinutes} min` : ''}.`);
+    }
+    if (info.scheduling?.rescheduleNoticeHours) lines.push(`Remarcação: avisar com ${info.scheduling.rescheduleNoticeHours}h de antecedência.`);
     if (info.policies) lines.push(`Regras e políticas: ${info.policies}`);
     if (info.professionals?.length) {
       lines.push('Profissionais:');
-      for (const p of info.professionals) lines.push(`- ${p.name}${p.specialty ? ` (${p.specialty})` : ''}`);
+      for (const p of info.professionals) {
+        lines.push(`- ${p.name}${p.specialty ? ` (${p.specialty})` : ''}${p.services?.length ? `: faz ${p.services.join(', ')}` : ''}`);
+      }
     }
     if (info.faq?.length) {
       lines.push('Perguntas frequentes:');
@@ -48,8 +105,13 @@ export function businessContext(catalog: Catalog | null, info: BusinessInfo | nu
         s.category ? `categoria ${s.category}` : '',
         s.durationMinutes ? `${s.durationMinutes} min por sessão` : '',
         s.sessions && s.sessions > 1 ? `${s.sessions} sessões` : '',
+        s.kind === 'evaluation' ? 'avaliação (primeira visita)' : '',
+        s.requiresEvaluation ? 'começa com uma avaliação (agende a avaliação)' : '',
+        s.aiBookable === false ? 'agendamento só com a equipe' : '',
+        s.professionals?.length ? `com ${s.professionals.join(' ou ')}` : '',
       ].filter(Boolean).join(', ');
-      lines.push(`- ${s.name}${opts.withIds && s.id ? ` [servico_id: ${s.id}]` : ''}: ${priceText(s)}${extra ? ` · ${extra}` : ''}${s.description ? ` · ${s.description.slice(0, 300)}` : ''}`);
+      const price = s.kind === 'evaluation' && s.price === 0 ? 'gratuita' : priceText(s);
+      lines.push(`- ${s.name}${opts.withIds && s.id ? ` [servico_id: ${s.id}]` : ''}: ${price}${extra ? ` · ${extra}` : ''}${s.description ? ` · ${s.description.slice(0, 300)}` : ''}`);
     }
   }
   if (catalog?.packages?.length) {

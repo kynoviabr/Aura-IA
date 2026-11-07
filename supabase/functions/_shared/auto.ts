@@ -27,6 +27,10 @@ Regras gerais:
 
 Agendamento (você tem acesso à agenda):
 1. Descubra o serviço (use o servico_id da lista) e o dia ou período de preferência do cliente.
+   - Serviço que "começa com uma avaliação": agende a Avaliação (servico_id da avaliação) e informe o serviço de interesse em servico_interesse_id.
+   - Serviço com "agendamento só com a equipe": não consulte a agenda; passe para a equipe.
+   - Diga o nome do profissional quando a ferramenta trouxer ("A Dra. Rafaela tem horário quinta às 13:00"). Se vier "nossa equipe", não invente nome.
+   - Se mais de um profissional fizer o serviço, pergunte se o cliente tem preferência; se não tiver, ofereça os primeiros horários de qualquer um.
 2. Use verificar_horarios e ofereça no máximo 3 opções, com dia da semana, data e hora.
    - Cliente pediu um horário exato ("quinta às 17h"): consulte com "horario" naquele dia. Pediu um período ("de tarde"): use "periodo".
    - NUNCA diga que um horário está livre ou ocupado sem ter consultado verificar_horarios NESTA resposta. O que foi dito antes na conversa pode estar desatualizado.
@@ -72,6 +76,7 @@ export const AUTO_TOOLS: ToolSpec[] = [
       type: 'object',
       properties: {
         servico_id: { type: 'string' },
+        servico_interesse_id: { type: 'string', description: 'Opcional: ao agendar a avaliação, o servico_id do tratamento de interesse' },
         data: DATE,
         hora: { type: 'string', description: 'Hora no formato HH:MM, como veio de verificar_horarios' },
         profissional_id: { type: 'string', description: 'profissional_id que veio de verificar_horarios' },
@@ -137,7 +142,7 @@ export function groupSlots(slots: Slot[], title: string, duration?: number, trun
   for (const x of slots) {
     const date = x.start.slice(0, 10);
     const key = `${date}|${x.professionalId}`;
-    if (!groups.has(key)) groups.set(key, { day: dayLabel(date), pro: x.professionalName || 'profissional', proId: x.professionalId, date, times: [] });
+    if (!groups.has(key)) groups.set(key, { day: dayLabel(date), pro: x.professionalName || 'nossa equipe (sem nome)', proId: x.professionalId, date, times: [] });
     groups.get(key)!.times.push(x.start.slice(11, 16));
   }
   const lines = [...groups.values()].map((g) => `- ${g.day} (data: ${g.date}) com ${g.pro} (profissional_id: ${g.proId}): ${g.times.join(', ')}`);
@@ -167,7 +172,14 @@ export function toolExecutor(
         const r = await product.availability({
           serviceId: s('servico_id'), from, to: s('data_fim'), professionalId: s('profissional_id') || undefined, period, time: horario || undefined,
         });
-        if (r.status !== 'ok') return `Não consegui consultar a agenda agora (${r.status === 'unsupported' ? 'a empresa não liberou a agenda' : 'erro'}). Passe para a equipe.`;
+        if (r.status !== 'ok') {
+          const why = r.status === 'error' ? r.code : 'unsupported';
+          if (why === 'requires_evaluation') return 'Este serviço começa com uma avaliação: consulte os horários da Avaliação e informe este serviço como interesse.';
+          if (why === 'not_bookable') return 'Este serviço só é agendado pela equipe. Passe para a equipe.';
+          if (why === 'service_not_found') return 'Serviço não encontrado: use um servico_id da lista.';
+          return `Não consegui consultar a agenda agora (${why === 'unsupported' ? 'a empresa não liberou a agenda' : 'erro'}). Passe para a equipe.`;
+        }
+        if (r.data.reason === 'no_professional') return 'Nenhum profissional cadastrado faz este serviço ainda. Passe para a equipe.';
         const what = [horario ? `às ${horario}` : '', s('periodo') ? `de ${s('periodo').replace('manha', 'manhã')}` : ''].filter(Boolean).join(' ');
         const range = from === s('data_fim') ? dayLabel(from) : `de ${dayLabel(from)} a ${dayLabel(s('data_fim'))}`;
         const slots: Slot[] = r.data.slots || [];
@@ -181,7 +193,7 @@ export function toolExecutor(
         if (!isDate(input.data) || !/^\d{2}:\d{2}$/.test(s('hora'))) return 'Erro: informe data (AAAA-MM-DD) e hora (HH:MM).';
         const start = `${s('data')}T${s('hora')}:00${OFFSET}`;
         const r = await product.createBooking({
-          serviceId: s('servico_id'), start, professionalId: s('profissional_id'),
+          serviceId: s('servico_id'), interestServiceId: s('servico_interesse_id') || undefined, start, professionalId: s('profissional_id'),
           contact: { ...contact, name: nome || contact.name },
           idempotencyKey: `${conversationId}:${s('servico_id')}:${start}`,
         });
@@ -190,6 +202,7 @@ export function toolExecutor(
           return `Agendado com sucesso: ${bookingLine(r.data.booking)}.`;
         }
         if (r.status === 'error' && r.code === 'slot_unavailable') return 'Esse horário não está mais livre. Verifique os horários de novo e ofereça outras opções.';
+        if (r.status === 'error' && r.code === 'requires_evaluation') return 'Este serviço começa com uma avaliação: agende a Avaliação, com este serviço como interesse.';
         return 'Não consegui marcar agora por um erro no sistema. Peça desculpas e passe para a equipe.';
       }
 

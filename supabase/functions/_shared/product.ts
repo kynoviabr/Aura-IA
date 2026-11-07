@@ -9,6 +9,8 @@ export type ProductResult<T> = { status: 'ok'; data: T } | { status: 'unsupporte
 
 export type CatalogService = {
   id?: string;
+  /** treatment = serviço normal; evaluation = avaliação (primeira visita). */
+  kind?: 'treatment' | 'evaluation';
   name: string;
   category?: string | null;
   description?: string | null;
@@ -17,25 +19,41 @@ export type CatalogService = {
   /** Como a IA pode falar do preço: exato, "a partir de" ou não informar (convidar para avaliação). */
   priceDisplay?: 'exact' | 'from' | 'hidden';
   price?: number | null;
+  /** Começa com avaliação: a IA agenda a avaliação, não o serviço. */
+  requiresEvaluation?: boolean;
+  /** false = a IA não agenda este serviço (passa para a equipe). */
+  aiBookable?: boolean;
+  /** Nomes dos profissionais que fazem (só os que aceitam mostrar o nome). */
+  professionals?: string[];
 };
 export type Catalog = { services: CatalogService[]; packages?: { name: string; price?: number | null; items?: string[] }[] };
 
+/**
+ * Dados da empresa. Formato organizado (preferido) ou texto livre (produtos antigos): a Aura entende os dois.
+ * hours[].day: 0 = domingo ... 6 = sábado.
+ */
 export type BusinessInfo = {
   name?: string;
   address?: string | null;
   phone?: string | null;
-  hours?: string | null;
-  payment?: string | null;
+  hours?: string | null | { day: number; opens: string; closes: string }[];
+  closures?: { date: string; reason?: string | null }[];
+  payment?: string | null | { methods?: string[]; maxInstallments?: number | null; installmentsMinValue?: number | null; notes?: string | null };
+  parking?: string | null | { type?: string; notes?: string | null };
+  insurance?: { accepts?: boolean; plans?: string[]; notes?: string | null };
+  evaluation?: { offered?: boolean; free?: boolean; durationMinutes?: number | null; price?: number | null };
+  scheduling?: { minNoticeMinutes?: number | null; horizonDays?: number | null; rescheduleNoticeHours?: number | null };
   policies?: string | null;
-  parking?: string | null;
-  professionals?: { name: string; specialty?: string | null }[];
+  professionals?: { name: string; specialty?: string | null; services?: string[] }[];
   faq?: { question: string; answer: string }[];
   notes?: string | null;
+  setupIssues?: { code: string; text: string }[];
 };
 
 /** Quem é o cliente no produto. Sem ref, o produto acha pelo telefone (ou cria um lead). */
 export type ProductContact = { type?: string | null; ref?: string | null; phone: string; name?: string | null };
 
+/** professionalName null = o profissional prefere não mostrar o nome. */
 export type Slot = { start: string; end: string; professionalId: string; professionalName?: string | null };
 export type Booking = {
   id: string; start: string; end?: string; status: string;
@@ -95,10 +113,10 @@ export class ProductClient {
     if (q.professionalId) p.set('professionalId', q.professionalId);
     if (q.period) p.set('period', q.period);
     if (q.time) p.set('time', q.time);
-    return this.call<{ timezone?: string; durationMinutes?: number; slots: Slot[]; truncated?: boolean }>('GET', `/aura/availability?${p}`);
+    return this.call<{ timezone?: string; durationMinutes?: number; slots: Slot[]; truncated?: boolean; reason?: string }>('GET', `/aura/availability?${p}`);
   }
 
-  createBooking(b: { serviceId: string; start: string; professionalId: string; contact: ProductContact; idempotencyKey: string }) {
+  createBooking(b: { serviceId: string; interestServiceId?: string; start: string; professionalId: string; contact: ProductContact; idempotencyKey: string }) {
     return this.call<{ booking: Booking }>('POST', '/aura/bookings', b, 10000);
   }
 
