@@ -113,7 +113,7 @@ export class ProductClient {
     if (q.professionalId) p.set('professionalId', q.professionalId);
     if (q.period) p.set('period', q.period);
     if (q.time) p.set('time', q.time);
-    return this.call<{ timezone?: string; durationMinutes?: number; slots: Slot[]; truncated?: boolean; reason?: string }>('GET', `/aura/availability?${p}`);
+    return this.call<{ timezone?: string; durationMinutes?: number; slots: Slot[]; truncated?: boolean; reason?: string; until?: string; horizonDays?: number }>('GET', `/aura/availability?${p}`);
   }
 
   createBooking(b: { serviceId: string; interestServiceId?: string; start: string; professionalId: string; contact: ProductContact; idempotencyKey: string }) {
