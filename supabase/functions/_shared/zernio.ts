@@ -1,7 +1,35 @@
 /** Cliente do provedor Zernio. Toda chamada ao WhatsApp passa por aqui (trocar de provedor = trocar este arquivo). */
 import { HttpError } from './http.ts';
+import { MediaError, type DownloadedMedia, type InboundAttachment, type MediaKind } from './media.ts';
 
 const BASE = 'https://zernio.com/api/v1';
+
+const KINDS: Record<string, MediaKind> = { image: 'image', video: 'video', audio: 'audio', file: 'document', document: 'document' };
+
+/**
+ * Anexos de `message.received` no formato da Aura. No WhatsApp o `url` aponta para
+ * /v1/whatsapp/media/{mediaId}; guardamos só o mediaId (o download sempre passa por downloadMedia).
+ */
+export function normalizeZernioAttachments(raw: unknown): InboundAttachment[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((a, index) => {
+    const att = (a && typeof a === 'object' ? a : {}) as Record<string, unknown>;
+    const type = String(att.type || 'unknown');
+    const url = typeof att.url === 'string' ? att.url : '';
+    const mediaId = url.match(/\/whatsapp\/media\/([A-Za-z0-9._-]{1,200})(?:[/?#]|$)/)?.[1] || null;
+    const payload = (att.payload && typeof att.payload === 'object' ? att.payload : {}) as Record<string, unknown>;
+    const str = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
+    return {
+      index,
+      kind: KINDS[type] || null,
+      providerType: type.slice(0, 40),
+      providerAttachmentId: mediaId,
+      mimeType: str(att.mimeType, 120),
+      fileName: str(att.fileName ?? att.filename ?? att.name, 200),
+      voice: payload.voice === true,
+    };
+  });
+}
 
 export type ZernioTemplate = { name: string; language: string; category: string; status: string; body: string; variables: number };
 
@@ -67,6 +95,63 @@ export class ZernioClient {
 
   async createTemplate(accountId: string, t: { name: string; category: string; language: string; components: unknown[] }): Promise<void> {
     await this.call('/whatsapp/templates', { method: 'POST', body: JSON.stringify({ accountId, ...t }) });
+  }
+
+  /**
+   * Baixa um arquivo recebido (só em memória). Para no limite de tamanho e no tempo máximo.
+   * A chave só vai para a Zernio: se houver redirecionamento, o segundo pedido sai sem a chave.
+   */
+  async downloadMedia(mediaId: string, maxBytes: number, timeoutMs: number): Promise<DownloadedMedia> {
+    if (!/^[A-Za-z0-9._-]{1,200}$/.test(mediaId)) throw new MediaError('media_reference_invalid', 'Referência de mídia inválida.');
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      let res = await this.fetchImpl(`${BASE}/whatsapp/media/${mediaId}`, {
+        headers: { Authorization: `Bearer ${this.apiKey}` }, redirect: 'manual', signal: ctrl.signal,
+      });
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get('location');
+        const next = loc ? new URL(loc, BASE) : null;
+        await res.body?.cancel();
+        if (!next || next.protocol !== 'https:') throw new MediaError('media_provider_error', 'Redirecionamento inválido do provedor.');
+        res = await this.fetchImpl(next.toString(), { redirect: 'manual', signal: ctrl.signal });
+      }
+      if (!res.ok) {
+        await res.body?.cancel();
+        if (res.status === 401 || res.status === 403) throw new MediaError('media_download_denied', `Provedor recusou o download (${res.status}).`);
+        if (res.status === 400 || res.status === 404 || res.status === 410) throw new MediaError('media_reference_invalid', `Arquivo não está mais disponível (${res.status}).`);
+        throw new MediaError('media_provider_error', `Erro ${res.status} no provedor.`, res.status === 429 || res.status >= 500);
+      }
+      const declared = Number(res.headers.get('content-length') || 0);
+      if (declared > maxBytes) {
+        await res.body?.cancel();
+        throw new MediaError('media_too_large', 'Arquivo maior que o limite.');
+      }
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      const reader = res.body?.getReader();
+      while (reader) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.length;
+        if (size > maxBytes) {
+          await reader.cancel();
+          throw new MediaError('media_too_large', 'Arquivo maior que o limite.');
+        }
+        chunks.push(value);
+      }
+      const bytes = new Uint8Array(size);
+      let off = 0;
+      for (const c of chunks) { bytes.set(c, off); off += c.length; }
+      const mime = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase() || null;
+      return { bytes, mimeType: mime, sizeBytes: size };
+    } catch (e) {
+      if (e instanceof MediaError) throw e;
+      if (ctrl.signal.aborted) throw new MediaError('media_download_timeout', 'Download demorou demais.', true);
+      throw new MediaError('media_provider_error', 'Falha de rede ao baixar a mídia.', true);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async sendText(conversationId: string, accountId: string, text: string): Promise<string | null> {

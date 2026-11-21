@@ -4,6 +4,9 @@ import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
 import { verifySignature } from '../_shared/hmac.ts';
 import { dispatchAppEvents } from '../_shared/dispatch.ts';
 import { autoReply } from '../_shared/auto-runner.ts';
+import { processAttachments } from '../_shared/media-runner.ts';
+import { mediaDeps } from '../_shared/media-deps.ts';
+import { normalizeZernioAttachments } from '../_shared/zernio.ts';
 
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 
@@ -36,6 +39,24 @@ Deno.serve(async (req) => {
   const bg = typeof EdgeRuntime !== 'undefined' ? EdgeRuntime : null;
   const job = dispatchAppEvents(rpc).catch((e) => console.error('dispatch', (e as Error).message));
   if (bg?.waitUntil) bg.waitUntil(job); else await job;
+
+  // Mídia recebida: registra os anexos e baixa já (a Meta apaga depois de um prazo). Só em empresa com mídia ligada.
+  const msg = event?.message as Record<string, unknown> | undefined;
+  const rawAttachments = msg?.attachments;
+  if (event?.event === 'message.received' && Array.isArray(rawAttachments) && rawAttachments.length && !(data as { duplicate?: boolean })?.duplicate) {
+    const account = event.account as Record<string, unknown> | undefined;
+    const media = (async () => {
+      const { data: reg, error: regError } = await admin.rpc('aura_register_attachments', {
+        p_account_id: String(account?.accountId ?? account?.id ?? ''),
+        p_provider_message_id: String(msg?.platformMessageId ?? ''),
+        p_attachments: normalizeZernioAttachments(rawAttachments),
+      });
+      if (regError) throw new Error(regError.message);
+      const pending = ((reg as { pending?: string[] })?.pending) || [];
+      if (pending.length) await processAttachments(mediaDeps(admin), pending);
+    })().catch((e) => console.error('media', (e as Error).message));
+    if (bg?.waitUntil) bg.waitUntil(media); else await media;
+  }
 
   // Mensagem de cliente: se a empresa está no modo automático, a IA responde (em segundo plano).
   const convId = (data as { conversation_id?: string })?.conversation_id;
