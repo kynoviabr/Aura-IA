@@ -48,10 +48,11 @@ describe('ferramentas da agenda', () => {
 
   it('horário exato não livre: avisa que vale só para a consulta', async () => {
     const product = fakeProduct({ availability: async () => ({ status: 'ok', data: { slots: [] } }) });
-    const out = await toolExecutor(product, contact, 'c', {})('verificar_horarios', { servico_id: 's', data_inicio: '2026-11-12', data_fim: '2026-11-12', horario: '17:00' });
+    const now = () => new Date('2026-11-06T15:00:00Z');
+    const out = await toolExecutor(product, contact, 'c', {}, now)('verificar_horarios', { servico_id: 's', data_inicio: '2026-11-12', data_fim: '2026-11-12', horario: '17:00' });
     expect(out).toContain('Nenhum horário livre às 17:00 quinta-feira, 12/11');
     expect(out).toContain('vale só para esta consulta');
-    expect(await toolExecutor(product, contact, 'c', {})('verificar_horarios', { servico_id: 's', data_inicio: '2026-11-12', data_fim: '2026-11-12', horario: '17h' })).toContain('HH:MM');
+    expect(await toolExecutor(product, contact, 'c', {}, now)('verificar_horarios', { servico_id: 's', data_inicio: '2026-11-12', data_fim: '2026-11-12', horario: '17h' })).toContain('HH:MM');
   });
 
   it('agenda com chave de repetição e guarda o resultado', async () => {
