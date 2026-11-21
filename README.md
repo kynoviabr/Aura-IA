@@ -13,6 +13,9 @@ Cada produto cuida do seu negócio (agenda, serviços, preços, clientes) e conv
 
 Arquitetura e fases: [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md).
 
+Roadmap multimodal (áudio, transcrição, fotos, vídeos e TTS):
+[`docs/ROADMAP_MENSAGERIA_MULTIMODAL.md`](docs/ROADMAP_MENSAGERIA_MULTIMODAL.md).
+
 ## Console
 
 Painel administrativo da Kynovia em `console/` (React, mesmo padrão visual dos produtos):
