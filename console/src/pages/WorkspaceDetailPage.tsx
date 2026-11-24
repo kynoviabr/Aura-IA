@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Coins, Loader2, RefreshCw, Stethoscope } from 'lucide-react';
+import { ArrowLeft, Coins, Loader2, RefreshCw, Stethoscope, Unplug } from 'lucide-react';
 import { PageHeader } from '@/components/ui/page-header';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { BrandButton } from '@/components/ui/brand-button';
@@ -71,6 +71,15 @@ export default function WorkspaceDetailPage() {
     onSuccess: (r) => { toast({ title: r.health === 'healthy' ? 'Número funcionando' : 'Número com problema', description: r.detail || undefined }); refresh(); },
     onError: fail,
   });
+  const disconnect = useMutation({
+    mutationFn: () => consoleApi<{ ok: boolean }>('channel_disconnect', { id: ch!.id }),
+    onSuccess: () => { toast({ title: 'Número desconectado', description: 'Agora ele pode ser conectado em outra empresa.' }); refresh(); },
+    onError: fail,
+  });
+  const askDisconnect = () => {
+    const who = ch?.phone_number ? phone(ch.phone_number) : 'este número';
+    if (confirm(`Desconectar ${who} de ${data!.workspace.name}?\n\nA empresa para de receber e enviar mensagens no WhatsApp na hora. Para voltar, é preciso conectar o número de novo pelo produto.`)) disconnect.mutate();
+  };
   const createTemplates = useMutation({
     mutationFn: () => consoleApi<{ result: { created: string[]; existing: string[]; failed: { name: string; error: string }[] } }>('channel_templates_create', { id: ch!.id }),
     onSuccess: (r) => {
@@ -101,11 +110,18 @@ export default function WorkspaceDetailPage() {
         <Card className="shadow-card">
           <CardHeader className="flex-row items-center justify-between pb-2">
             <CardTitle className="text-base">WhatsApp</CardTitle>
-            {ch && ch.status !== 'not_started' && can(['owner', 'operator']) && (
-              <BrandButton size="sm" variant="outline" onClick={() => check.mutate()} disabled={check.isPending}>
-                {check.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Stethoscope className="h-3.5 w-3.5" />} Verificar agora
-              </BrandButton>
-            )}
+            <div className="flex gap-2">
+              {ch && ch.status !== 'not_started' && can(['owner', 'operator']) && (
+                <BrandButton size="sm" variant="outline" onClick={() => check.mutate()} disabled={check.isPending}>
+                  {check.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Stethoscope className="h-3.5 w-3.5" />} Verificar agora
+                </BrandButton>
+              )}
+              {ch && ch.status !== 'not_started' && ch.status !== 'disconnected' && can(['owner']) && (
+                <BrandButton size="sm" variant="ghost" className="text-destructive hover:bg-destructive/10" onClick={askDisconnect} disabled={disconnect.isPending}>
+                  {disconnect.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Unplug className="h-3.5 w-3.5" />} Desconectar número
+                </BrandButton>
+              )}
+            </div>
           </CardHeader>
           <CardContent className="space-y-3 text-sm">
             {!ch ? <p className="text-muted-foreground">Esta empresa ainda não conectou um número.</p> : (

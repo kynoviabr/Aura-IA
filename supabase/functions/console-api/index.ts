@@ -137,6 +137,28 @@ async function handle(db: SupabaseClient, me: Me, action: string, b: Record<stri
       return { health, detail: issues || null };
     }
 
+    // Solta o número desta empresa para ele poder ser conectado em outra.
+    // Só o dono: a empresa para de receber e enviar mensagens na hora.
+    case 'channel_disconnect': {
+      need(me, ['owner']);
+      const id = str(b.id, 64);
+      const { data: ch } = await db.from('channels').select('id, workspace_id, provider_account_id, phone_number, status').eq('id', id).maybeSingle();
+      if (!ch) throw new HttpError(404, 'not_found', 'Número não encontrado.');
+      const provider = ch.provider_account_id ? await zernio().disconnectAccount(ch.provider_account_id) : 'none';
+      const { error } = await db.from('channels').update({
+        status: 'disconnected', health: 'disconnected', health_detail: 'Desconectado pelo Console',
+        provider_account_id: null, health_checked_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }).eq('id', ch.id);
+      if (error) throw new HttpError(400, 'db_error', error.message);
+      // Desconexão de propósito não é problema: fecha os alertas do número.
+      await rpc(db, 'aura_resolve_alert', { p_kind: 'channel_disconnected', p_target_type: 'channel', p_target_id: ch.id });
+      await rpc(db, 'aura_resolve_alert', { p_kind: 'channel_unhealthy', p_target_type: 'channel', p_target_id: ch.id });
+      await audit(db, me, 'channel_disconnected', 'channel', ch.id, {
+        workspace_id: ch.workspace_id, phone_number: ch.phone_number, previous_status: ch.status, provider,
+      });
+      return { ok: true, provider };
+    }
+
     case 'channel_templates': {
       const { data: ch } = await db.from('channels').select('provider_account_id').eq('id', str(b.id, 64)).maybeSingle();
       if (!ch?.provider_account_id) return { templates: [] };
