@@ -65,6 +65,22 @@ export class ZernioClient {
     return (created.profile as { _id: string })._id;
   }
 
+  /**
+   * Desconecta o número na Zernio (DELETE /accounts/{id}). A Zernio guarda a conta por 1h;
+   * depois ela some. 404 = já estava desconectado, o que para nós também serve.
+   */
+  async disconnectAccount(accountId: string): Promise<'removed' | 'not_found'> {
+    if (!/^[A-Za-z0-9._-]{1,200}$/.test(accountId)) throw new HttpError(400, 'invalid_account', 'Conta de WhatsApp inválida.');
+    const res = await this.fetchImpl(`${BASE}/accounts/${accountId}`, {
+      method: 'DELETE', headers: { Authorization: `Bearer ${this.apiKey}` },
+    });
+    await res.body?.cancel().catch(() => {});
+    if (res.ok) return 'removed';
+    if (res.status === 404) return 'not_found';
+    console.error('zernio', 'disconnect', res.status);
+    throw new HttpError(502, 'provider_error', `Erro ${res.status} ao desconectar o número no provedor de WhatsApp.`);
+  }
+
   async connectUrl(profileId: string, redirectUrl: string): Promise<string> {
     const r = await this.call(`/connect/whatsapp?profileId=${profileId}&redirect_url=${encodeURIComponent(redirectUrl)}`);
     return String(r.authUrl);
